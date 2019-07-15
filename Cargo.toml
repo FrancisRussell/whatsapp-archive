@@ -1,0 +1,12 @@
+[package]
+name = "waa"
+version = "0.1.0"
+authors = ["Francis Russell <francis@unchartedbackwaters.co.uk>"]
+edition = "2018"
+
+[dependencies]
+clap = "2.33"
+derive-error = "0.0.4"
+log = "0.4"
+filetime = "0.2.6"
+regex = "1"
