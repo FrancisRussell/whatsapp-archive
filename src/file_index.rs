@@ -60,7 +60,8 @@ impl FileIndex {
         match index_type {
             IndexType::Original => {
                 let db_path = path.join("Databases").join("msgstore.db.crypt12");
-                if !db_path.exists() {
+                let tag_path = path.join(TAG_NAME);
+                if !db_path.exists() || tag_path.exists() {
                     return Err(FileIndexError::NotWhatsAppFolder);
                 }
             },
