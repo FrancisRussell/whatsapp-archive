@@ -97,6 +97,9 @@ impl FileIndex {
         while let Some(path) = remaining.pop_front() {
             for entry in path.read_dir()? {
                 let entry = entry?;
+                if entry.path().file_name().map(|n| n == TAG_NAME).unwrap_or(false) {
+                    continue;
+                }
                 let ftype = entry.file_type()?;
                 if ftype.is_file() {
                     result.push(FileInfo::new(dir, entry)?);
