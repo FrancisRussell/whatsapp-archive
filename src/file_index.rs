@@ -275,9 +275,7 @@ impl FileIndex {
         }
 
         self.clean_old_dbs()?;
-        let new_entries = Self::build_index(&self.path)?;
-        self.entries = new_entries;
-        Ok(())
+        self.reindex()
     }
 
     pub fn get_size_bytes(&self) -> u64 {
@@ -314,6 +312,12 @@ impl FileIndex {
         list.iter().filter(|p| index.contains_key(p.relative_path.as_path())).cloned().collect()
     }
 
+    fn reindex(&mut self) -> Result<(), FileIndexError> {
+        let new_entries = Self::build_index(&self.path)?;
+        self.entries = new_entries;
+        Ok(())
+    }
+
     pub fn delete_files_from_infos<'a, I: IntoIterator<Item = &'a FileInfo>>(&mut self, infos: I) -> Result<(), FileIndexError> {
         let index = self.index_as_hash();
         for other_info in infos {
@@ -328,6 +332,6 @@ impl FileIndex {
                 return Err(FileIndexError::FileMissing);
             }
         }
-        Ok(())
+        self.reindex()
     }
 }

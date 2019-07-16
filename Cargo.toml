@@ -5,9 +5,10 @@ authors = ["Francis Russell <francis@unchartedbackwaters.co.uk>"]
 edition = "2018"
 
 [dependencies]
+bytefmt = "0.1.7"
+chrono = "0.4.7"
 clap = "2.33"
 derive-error = "0.0.4"
-log = "0.4"
 filetime = "0.2.6"
+log = "0.4"
 regex = "1"
-chrono = "0.4.7"

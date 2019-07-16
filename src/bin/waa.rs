@@ -1,5 +1,6 @@
 extern crate clap;
 extern crate waa;
+extern crate bytefmt;
 use clap::{App,Arg};
 use waa::{FileIndex, FileQuery, FileOrder, IndexType, DataLimit};
 
@@ -18,31 +19,44 @@ fn main() {
             .value_name("archive_folder"))
         .arg(Arg::with_name("LIMIT")
              .short("l")
-             .help("Limit on size of WhatsApp folder in MB")
+             .help("Limit on size of WhatsApp folder with suffix e.g. 512MiB")
              .required(false)
              .value_name("size_limit"));
 
     let matches = app.get_matches();
     let wa_folder = matches.value_of("WHATSAPP_STORAGE").unwrap();
     let archive_folder = matches.value_of("ARCHIVE").unwrap();
-    println!("Archiving from {} to {}", wa_folder, archive_folder);
+    if let Some(_) = matches.value_of("LIMIT").and_then(|v| v.parse::<usize>().ok()) {
+        panic!("LIMIT must include a suffix e.g. 12MiB");
+    }
+    let limit = matches.value_of("LIMIT")
+        .map(|v| bytefmt::parse(v).expect("Unable to parse LIMIT"))
+        .map(|v| DataLimit::from_bytes(v)).unwrap_or(DataLimit::Infinite);
 
     let mut wa_index = FileIndex::new(IndexType::Original, wa_folder).expect("Unable to index WhatsApp folder");
     let mut archive_index = FileIndex::new(IndexType::Archive, archive_folder).expect("Unable to index archive folder");
+    let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
+    println!("Archive size is currently {:.2} MB", archive_size_mb);
+    println!("Mirroring new files from {} to {}...", wa_folder, archive_folder);
     archive_index.mirror_from(&wa_index).expect("Unable to mirror WhatsApp folder");
+    println!("Mirroring complete.");
+    let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
+    println!("Archive size is now {:.2} MB", archive_size_mb);
 
-    let limit = matches.value_of("LIMIT")
-        .map(|v| v.parse::<u64>().expect("Unable to parse LIMIT"))
-        .map(|v| DataLimit::from_bytes(v * 1024 * 1024)).unwrap_or(DataLimit::Infinite);
+    let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
+    println!("WhatsApp folder size is currently {:.2} MB", wa_folder_size_mb);
+
     let mut query = FileQuery::new();
     query.set_order(FileOrder::LargestOldest);
     query.set_limit(limit);
-    let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
-    let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
-    println!("WhatsApp folder size is {:.2} MB", wa_folder_size_mb);
-    println!("Archive size is {:.2} MB", archive_size_mb);
     let deletion_candidates = archive_index.get_deletion_candidates(&query);
     let deletion_candidates = wa_index.filter_existing(&deletion_candidates);
     println!("Deleting {} files from WhatsApp folder...", deletion_candidates.len());
     wa_index.delete_files_from_infos(&deletion_candidates).expect("Unable to trim files from WhatsApp folder");
+    if !deletion_candidates.is_empty() {
+        let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
+        println!("WhatsApp folder size is now {:.2} MB", wa_folder_size_mb);
+    }
+
 }
+
