@@ -3,7 +3,9 @@ use regex::Regex;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::fs::{DirEntry, File};
+use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
+use chrono::{NaiveDate, NaiveTime, NaiveDateTime, Utc};
 
 const TAG_NAME: &str = ".waa";
 const MAX_DBS: usize = 10;
@@ -15,12 +17,14 @@ pub enum FileIndexError {
     NotArchiveFolder,
     NewArchiveFolderNotEmpty,
     FileMismatch,
+    FileMissing,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileInfo {
     relative_path: PathBuf,
     modification_time: FileTime,
+    estimated_creation_date: NaiveDateTime,
     size: u64,
 }
 
@@ -30,13 +34,77 @@ pub enum IndexType {
     Archive,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum FileOrder {
+    Largest,
+    Oldest,
+    LargestOldest,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum DataLimit {
+    Infinite,
+    Bytes(u64),
+}
+
+impl DataLimit {
+    pub fn from_bytes(count: u64) -> DataLimit {
+        DataLimit::Bytes(count)
+    }
+}
+
+impl FileOrder {
+    pub fn compare(&self, left: &FileInfo, right: &FileInfo) -> Ordering {
+        match *self {
+            FileOrder::Largest => left.size.cmp(&right.size).reverse(),
+            FileOrder::Oldest => left.estimate_creation_date().cmp(&right.estimate_creation_date()),
+            FileOrder::LargestOldest => {
+                let now = Utc::now().naive_utc();
+                let left_offset = now.signed_duration_since(left.estimate_creation_date());
+                let right_offset = now.signed_duration_since(right.estimate_creation_date());
+                let left_val = (left.size as f64) * (left_offset.num_milliseconds() as f64);
+                let right_val = (right.size as f64) * (right_offset.num_milliseconds() as f64);
+                left_val.partial_cmp(&right_val).unwrap().reverse()
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FileQuery {
+    order: FileOrder,
+    limit: DataLimit,
+}
+
+impl FileQuery {
+    pub fn new() -> FileQuery {
+        FileQuery {
+            order: FileOrder::Oldest,
+            limit: DataLimit::Infinite,
+        }
+    }
+
+    pub fn set_order(&mut self, order: FileOrder) {
+        self.order = order;
+    }
+
+    pub fn set_limit(&mut self, limit: DataLimit) {
+        self.limit = limit;
+    }
+}
+
 impl FileInfo {
     fn new<P: AsRef<Path>>(root: P, entry: DirEntry) -> Result<FileInfo, FileIndexError> {
         let relative_path = entry.path().strip_prefix(root.as_ref()).expect("Unable to strip prefix").to_owned();
         let metadata = entry.metadata()?;
+        let modification_time = FileTime::from_last_modification_time(&metadata);
+        let estimated_creation_date = Self::creation_date_from_name(&relative_path)
+            .unwrap_or(NaiveDateTime::from_timestamp(modification_time.unix_seconds(),
+                                                     modification_time.nanoseconds()));
         let result = FileInfo {
             relative_path,
-            modification_time: FileTime::from_last_modification_time(&metadata),
+            modification_time,
+            estimated_creation_date,
             size: metadata.len(),
         };
         Ok(result)
@@ -44,6 +112,22 @@ impl FileInfo {
 
     fn set_modification_time(&self, file: &File) -> Result<(), FileIndexError> {
         Ok(filetime::set_file_handle_times(file, None, Some(self.modification_time))?)
+    }
+
+    fn creation_date_from_name(relative_path: &Path) -> Option<NaiveDateTime> {
+        let day_regex = Regex::new(r"^.*-(\d{8})-WA[0-9]{4}\..+$").unwrap();
+        let file_name = relative_path.file_name().unwrap().to_string_lossy().as_ref().to_string();
+        if let Some(capture) = day_regex.captures(&file_name).and_then(|c| c.get(1)) {
+            let date_time = NaiveDate::parse_from_str(capture.as_str(), "%Y%m%d")
+                .map(|date| NaiveDateTime::new(date, NaiveTime::from_hms(0, 0, 0)));
+            date_time.ok()
+        } else {
+            None
+        }
+    }
+
+    fn estimate_creation_date(&self) -> NaiveDateTime {
+        self.estimated_creation_date
     }
 }
 
@@ -165,7 +249,7 @@ impl FileIndex {
                 let other = source.get(rel_path).unwrap();
                 if value != other {
                     println!("Copying file with metadata mismatch {:?}", rel_path);
-                    if let Err(e) = Self::copy_file(&source_index.path, &self.path, value) {
+                    if let Err(e) = Self::copy_file(&source_index.path, &self.path, other) {
                         let dest_path = self.path.join(rel_path);
                         let _ = std::fs::remove_file(&dest_path)
                             .map_err(|e| eprintln!("During delete of incompletely copied file: {:?}", e));
@@ -193,6 +277,57 @@ impl FileIndex {
         self.clean_old_dbs()?;
         let new_entries = Self::build_index(&self.path)?;
         self.entries = new_entries;
+        Ok(())
+    }
+
+    pub fn get_size_bytes(&self) -> u64 {
+        self.entries.iter().map(|fi| fi.size).fold(0, |a, b| a + b)
+    }
+
+    pub fn get_deletion_candidates(&self, query: &FileQuery) -> Vec<FileInfo> {
+        let mut media_entries: Vec<FileInfo> = self.entries.iter()
+                .filter(|p| p.relative_path.starts_with("Media"))
+                .filter(|e| e.relative_path.file_name().map(|e| e != ".nomedia").unwrap_or(true))
+                .cloned()
+                .collect();
+        media_entries.sort_unstable_by(|a, b| query.order.compare(a, b));
+        match query.limit {
+            DataLimit::Infinite => { media_entries.clear(); },
+            DataLimit::Bytes(limit) => {
+                let mut total: u64 = self.get_size_bytes();
+                let mut count = 0;
+                for (idx, entry) in media_entries.iter().enumerate() {
+                    if total <= limit {
+                        count = idx;
+                        break;
+                    }
+                    total = total.saturating_sub(entry.size);
+                }
+                media_entries.truncate(count);
+            },
+        }
+        media_entries
+    }
+
+    pub fn filter_existing(&self, list: &Vec<FileInfo>) -> Vec<FileInfo> {
+        let index = self.index_as_hash();
+        list.iter().filter(|p| index.contains_key(p.relative_path.as_path())).cloned().collect()
+    }
+
+    pub fn delete_files_from_infos<'a, I: IntoIterator<Item = &'a FileInfo>>(&mut self, infos: I) -> Result<(), FileIndexError> {
+        let index = self.index_as_hash();
+        for other_info in infos {
+            if let Some(info) = index.get(other_info.relative_path.as_path()) {
+                if info != other_info {
+                    return Err(FileIndexError::FileMismatch);
+                }
+                let path = self.path.join(&info.relative_path);
+                println!("Deleting {}", path.to_string_lossy());
+                std::fs::remove_file(&path)?;
+            } else {
+                return Err(FileIndexError::FileMissing);
+            }
+        }
         Ok(())
     }
 }
