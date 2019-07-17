@@ -2,7 +2,7 @@ extern crate clap;
 extern crate waa;
 extern crate bytefmt;
 use clap::{App,Arg};
-use waa::{FileIndex, FileQuery, FileOrder, IndexType, DataLimit, ActionType};
+use waa::{FileIndex, FileQuery, FileOrder, IndexType, DataLimit, ActionType, FileFilter};
 
 fn main() {
     let app = App::new("WhatsApp Archiver")
@@ -27,7 +27,12 @@ fn main() {
             .long("dry-run")
             .help("Print actions without modifying filesystem")
             .required(false)
-            .takes_value(false));
+            .takes_value(false))
+        .arg(Arg::with_name("MIN_AGE_DAYS")
+            .required(false)
+            .long("min-age")
+            .help("Minimum age of any deleted files in days")
+            .takes_value(true));
 
     let matches = app.get_matches();
     let wa_folder = matches.value_of("WHATSAPP_STORAGE").unwrap();
@@ -38,6 +43,10 @@ fn main() {
     let limit = matches.value_of("LIMIT")
         .map(|v| bytefmt::parse(v).expect("Unable to parse LIMIT"))
         .map(|v| DataLimit::from_bytes(v)).unwrap_or(DataLimit::Infinite);
+    let min_age = matches.value_of("MIN_AGE_DAYS")
+        .map(|v| v.parse::<u32>().expect("Unable to parse MIN_AGE_DAYS"))
+        .map(|v| FileFilter::MinAgeDays(v))
+        .unwrap_or(FileFilter::All);
 
     let action_type = if matches.is_present("DRY_RUN") {
         println!("Running in dry-run mode. No files will be changed.");
@@ -61,6 +70,7 @@ fn main() {
     let mut query = FileQuery::new();
     query.set_order(FileOrder::LargestOldest);
     query.set_limit(limit);
+    query.set_filter(min_age);
     let deletion_candidates = archive_index.get_deletion_candidates(&query);
     let deletion_candidates = deletion_candidates.iter().map(|(path, _)| path).cloned().collect();
     let deletion_candidates = wa_index.filter_existing(&deletion_candidates);

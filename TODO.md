@@ -2,7 +2,6 @@
 
 In approximate order of decreasing importance:
 
-* Option to filter minimum age of files being deleted.
 * Option to filter by file type.
 * Command to restore previously deleted files.
 * Interactive mode.

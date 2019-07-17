@@ -77,9 +77,29 @@ impl FileOrder {
 }
 
 #[derive(Debug)]
+pub enum FileFilter {
+    All,
+    MinAgeDays(u32)
+}
+
+impl FileFilter {
+    pub fn matches(&self, file: &FileInfo) -> bool {
+        match *self {
+            FileFilter::All => true,
+            FileFilter::MinAgeDays(min) => {
+                let now = Utc::now().naive_utc();
+                let age = now.signed_duration_since(file.estimate_creation_date());
+                age.num_days() >= (min as i64)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct FileQuery {
     order: FileOrder,
     limit: DataLimit,
+    filter: FileFilter,
 }
 
 impl FileQuery {
@@ -87,6 +107,7 @@ impl FileQuery {
         FileQuery {
             order: FileOrder::Oldest,
             limit: DataLimit::Infinite,
+            filter: FileFilter::All,
         }
     }
 
@@ -96,6 +117,10 @@ impl FileQuery {
 
     pub fn set_limit(&mut self, limit: DataLimit) {
         self.limit = limit;
+    }
+
+    pub fn set_filter(&mut self, filter: FileFilter) {
+        self.filter = filter;
     }
 }
 
@@ -346,6 +371,7 @@ impl FileIndex {
         let mut media_entries: Vec<(PathBuf, FileInfo)> = self.entries.iter()
                 .filter(|(p, _)| p.starts_with("Media"))
                 .filter(|(p, _)| p.file_name().map(|e| e != ".nomedia").unwrap_or(true))
+                .filter(|(_, i)| query.filter.matches(i))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
         media_entries.sort_unstable_by(|(_, a), (_, b)| query.order.compare(a, b));
@@ -355,8 +381,8 @@ impl FileIndex {
                 let mut total: u64 = self.get_size_bytes();
                 let mut count = 0;
                 for (idx, (_, entry)) in media_entries.iter().enumerate() {
+                    count = idx;
                     if total <= limit {
-                        count = idx;
                         break;
                     }
                     total = total.saturating_sub(entry.size);

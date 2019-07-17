@@ -4,4 +4,4 @@ extern crate chrono;
 extern crate filetime;
 extern crate regex;
 mod file_index;
-pub use self::file_index::{FileIndex, FileQuery, IndexType, FileOrder, DataLimit, ActionType};
+pub use self::file_index::{FileIndex, FileQuery, IndexType, FileOrder, DataLimit, ActionType, FileFilter};
