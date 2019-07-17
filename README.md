@@ -9,7 +9,7 @@ Usage:
 
 ``` 
 $ cargo run --release -- -a <archive_folder> -w <whatsapp_folder>
-  [-l <size_limit>]
+  [-l <size_limit>] [--dry-run] [--min-age=DAYS]
 ```
 
 e.g.
@@ -17,7 +17,7 @@ e.g.
 ``` 
 $ cargo run --release -- -a ${HOME}/whatsapp_backup 
   -w /mnt/phone/internal_storage/WhatsApp 
-  -l 512MiB 
+  -l 512MiB --min-age-days=14
 ```
 
 All files not present in `archive_folder` will be copied from
