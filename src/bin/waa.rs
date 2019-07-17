@@ -2,7 +2,7 @@ extern crate clap;
 extern crate waa;
 extern crate bytefmt;
 use clap::{App,Arg};
-use waa::{FileIndex, FileQuery, FileOrder, IndexType, DataLimit};
+use waa::{FileIndex, FileQuery, FileOrder, IndexType, DataLimit, ActionType};
 
 fn main() {
     let app = App::new("WhatsApp Archiver")
@@ -21,7 +21,13 @@ fn main() {
              .short("l")
              .help("Limit on size of WhatsApp folder with suffix e.g. 512MiB")
              .required(false)
-             .value_name("size_limit"));
+             .value_name("size_limit"))
+        .arg(Arg::with_name("DRY_RUN")
+            .short("n")
+            .long("dry-run")
+            .help("Print actions without modifying filesystem")
+            .required(false)
+            .takes_value(false));
 
     let matches = app.get_matches();
     let wa_folder = matches.value_of("WHATSAPP_STORAGE").unwrap();
@@ -33,8 +39,14 @@ fn main() {
         .map(|v| bytefmt::parse(v).expect("Unable to parse LIMIT"))
         .map(|v| DataLimit::from_bytes(v)).unwrap_or(DataLimit::Infinite);
 
-    let mut wa_index = FileIndex::new(IndexType::Original, wa_folder).expect("Unable to index WhatsApp folder");
-    let mut archive_index = FileIndex::new(IndexType::Archive, archive_folder).expect("Unable to index archive folder");
+    let action_type = if matches.is_present("DRY_RUN") {
+        println!("Running in dry-run mode. No files will be changed.");
+        ActionType::Dry
+    } else {
+        ActionType::Real
+    };
+    let mut wa_index = FileIndex::new(IndexType::Original, wa_folder, action_type).expect("Unable to index WhatsApp folder");
+    let mut archive_index = FileIndex::new(IndexType::Archive, archive_folder, action_type).expect("Unable to index archive folder");
     let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
     println!("Archive size is currently {:.2} MB", archive_size_mb);
     println!("Mirroring new files from {} to {}...", wa_folder, archive_folder);
@@ -50,9 +62,10 @@ fn main() {
     query.set_order(FileOrder::LargestOldest);
     query.set_limit(limit);
     let deletion_candidates = archive_index.get_deletion_candidates(&query);
+    let deletion_candidates = deletion_candidates.iter().map(|(path, _)| path).cloned().collect();
     let deletion_candidates = wa_index.filter_existing(&deletion_candidates);
     println!("Deleting {} files from WhatsApp folder...", deletion_candidates.len());
-    wa_index.delete_files_from_infos(&deletion_candidates).expect("Unable to trim files from WhatsApp folder");
+    wa_index.remove_files(&deletion_candidates).expect("Unable to trim files from WhatsApp folder");
     if !deletion_candidates.is_empty() {
         let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
         println!("WhatsApp folder size is now {:.2} MB", wa_folder_size_mb);

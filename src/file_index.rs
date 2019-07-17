@@ -2,8 +2,9 @@ use filetime::FileTime;
 use regex::Regex;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::fs::{DirEntry, File};
+use std::fs::File;
 use std::cmp::Ordering;
+use std::collections::hash_map;
 use std::collections::{HashMap, VecDeque};
 use chrono::{NaiveDate, NaiveTime, NaiveDateTime, Utc};
 
@@ -22,7 +23,6 @@ pub enum FileIndexError {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileInfo {
-    relative_path: PathBuf,
     modification_time: FileTime,
     estimated_creation_date: NaiveDateTime,
     size: u64,
@@ -32,6 +32,12 @@ pub struct FileInfo {
 pub enum IndexType {
     Original,
     Archive,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActionType {
+    Real,
+    Dry,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -94,15 +100,14 @@ impl FileQuery {
 }
 
 impl FileInfo {
-    fn new<P: AsRef<Path>>(root: P, entry: DirEntry) -> Result<FileInfo, FileIndexError> {
-        let relative_path = entry.path().strip_prefix(root.as_ref()).expect("Unable to strip prefix").to_owned();
-        let metadata = entry.metadata()?;
+    fn new(path: &Path) -> Result<FileInfo, FileIndexError> {
+        let filename = path.file_name().unwrap();
+        let metadata = path.metadata()?;
         let modification_time = FileTime::from_last_modification_time(&metadata);
-        let estimated_creation_date = Self::creation_date_from_name(&relative_path)
+        let estimated_creation_date = Self::creation_date_from_name(filename.as_ref())
             .unwrap_or(NaiveDateTime::from_timestamp(modification_time.unix_seconds(),
                                                      modification_time.nanoseconds()));
         let result = FileInfo {
-            relative_path,
             modification_time,
             estimated_creation_date,
             size: metadata.len(),
@@ -114,9 +119,9 @@ impl FileInfo {
         Ok(filetime::set_file_handle_times(file, None, Some(self.modification_time))?)
     }
 
-    fn creation_date_from_name(relative_path: &Path) -> Option<NaiveDateTime> {
+    fn creation_date_from_name(filename: &Path) -> Option<NaiveDateTime> {
         let day_regex = Regex::new(r"^.*-(\d{8})-WA[0-9]{4}\..+$").unwrap();
-        let file_name = relative_path.file_name().unwrap().to_string_lossy().as_ref().to_string();
+        let file_name = filename.to_string_lossy();
         if let Some(capture) = day_regex.captures(&file_name).and_then(|c| c.get(1)) {
             let date_time = NaiveDate::parse_from_str(capture.as_str(), "%Y%m%d")
                 .map(|date| NaiveDateTime::new(date, NaiveTime::from_hms(0, 0, 0)));
@@ -134,13 +139,15 @@ impl FileInfo {
 #[derive(Debug)]
 pub struct FileIndex {
     index_type: IndexType,
+    action_type: ActionType,
     path: PathBuf,
-    entries: Vec<FileInfo>,
+    entries: HashMap<PathBuf, FileInfo>,
 }
 
 impl FileIndex {
-    pub fn new<P: AsRef<Path>>(index_type: IndexType, path: P) -> Result<FileIndex, FileIndexError> {
+    pub fn new<P: AsRef<Path>>(index_type: IndexType, path: P, action_type: ActionType) -> Result<FileIndex, FileIndexError> {
         let path = path.as_ref();
+        let mut new = false;
         match index_type {
             IndexType::Original => {
                 let db_path = path.join("Databases").join("msgstore.db.crypt12");
@@ -151,33 +158,55 @@ impl FileIndex {
             },
             IndexType::Archive => {
                 if !path.exists() {
-                    std::fs::create_dir_all(path)?;
+                    if action_type == ActionType::Real {
+                        std::fs::create_dir_all(path)?;
+                    }
                 }
                 let tag_path = path.join(TAG_NAME);
                 if !tag_path.exists() {
-                    let num_entries = path.read_dir()?.count();
-                    if num_entries == 0 {
-                        std::fs::write(tag_path, &[])?;
+                    if action_type == ActionType::Real {
+                        let num_entries = path.read_dir()?.count();
+                        if num_entries == 0 {
+                            std::fs::write(tag_path, &[])?;
+                        } else {
+                            return Err(FileIndexError::NewArchiveFolderNotEmpty);
+                        }
                     } else {
-                        return Err(FileIndexError::NewArchiveFolderNotEmpty);
+                        new = true;
                     }
                 }
             },
         };
-        let path = path.canonicalize()?;
-        let entries = Self::build_index(&path)?;
-        let result = FileIndex {
+        let path = if action_type == ActionType::Real {
+            path.canonicalize()?
+        } else {
+            if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) {
+                let parent = parent.canonicalize()?;
+                parent.join(file_name).to_path_buf()
+            } else {
+                path.to_path_buf()
+            }
+        };
+        let mut result = FileIndex {
             index_type,
             path: path.to_owned(),
-            entries,
+            entries: HashMap::new(),
+            action_type,
         };
+        // So that dry-run mode doesn't error when a new folder hasn't been created
+        if !new { result.rebuild_index()?; }
         Ok(result)
     }
 
-    fn build_index(dir: &Path) -> Result<Vec<FileInfo>, FileIndexError> {
-        let mut result = Vec::new();
+    fn get_relative_path(&self, path: &Path) -> PathBuf {
+        path.strip_prefix(&self.path)
+            .expect("Unable to strip prefix").to_owned()
+    }
+
+    fn rebuild_index(&mut self) -> Result<(), FileIndexError> {
         let mut remaining = VecDeque::new();
-        remaining.push_back(dir.to_owned());
+        remaining.push_back(self.path.clone());
+        self.entries.clear();
         while let Some(path) = remaining.pop_front() {
             for entry in path.read_dir()? {
                 let entry = entry?;
@@ -186,7 +215,10 @@ impl FileIndex {
                 }
                 let ftype = entry.file_type()?;
                 if ftype.is_file() {
-                    result.push(FileInfo::new(dir, entry)?);
+                    let path = entry.path();
+                    let info = FileInfo::new(&path)?;
+                    let rel_path = self.get_relative_path(&path);
+                    self.entries.insert(rel_path, info);
                 } else if ftype.is_dir() {
                     remaining.push_back(entry.path());
                 } else {
@@ -194,34 +226,77 @@ impl FileIndex {
                 }
             }
         }
-        Ok(result)
-    }
-
-    fn index_as_hash(&self) -> HashMap<PathBuf, FileInfo> {
-        let mut result = HashMap::new();
-        for entry in &self.entries {
-            result.insert(entry.relative_path.to_owned(), entry.clone());
-        }
-        result
-    }
-
-    fn copy_file<P1: AsRef<Path>, P2: AsRef<Path>>(from_root: P1, to_root: P2, file_info: &FileInfo) -> Result<(), FileIndexError> {
-        let rel_path = &file_info.relative_path;
-        let source_path = from_root.as_ref().join(&rel_path);
-        let dest_path = to_root.as_ref().join(&rel_path);
-        if let Some(parent) = dest_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(&source_path, &dest_path)?;
-        let copied = File::open(&dest_path)?;
-        file_info.set_modification_time(&copied)?;
         Ok(())
+    }
+
+    fn import_file_maybe_metadata(&mut self, relative_path: &Path, source: &Path, info: Option<&FileInfo>) -> Result<(), FileIndexError> {
+        let dest_path = self.path.join(relative_path);
+        let mut do_copy = || {
+            assert!(relative_path.is_relative());
+            if self.action_type == ActionType::Real {
+                if let Some(parent) = dest_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(source, &dest_path)?;
+                match info {
+                    None => Ok(()),
+                    Some(info) => {
+                        let copied = File::open(&dest_path)?;
+                        info.set_modification_time(&copied)?;
+                        let actual_metadata = FileInfo::new(&dest_path)?;
+                        if actual_metadata == *info {
+                            self.entries.insert(relative_path.to_path_buf(), actual_metadata);
+                            Ok(())
+                        } else {
+                            Err(FileIndexError::FileMismatch)
+                        }
+                    },
+                }
+            } else {
+                let actual_metadata = FileInfo::new(source)?;
+                self.entries.insert(relative_path.to_path_buf(), actual_metadata);
+                Ok(())
+            }
+        };
+        match do_copy() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if self.action_type == ActionType::Real {
+                    let _ = std::fs::remove_file(&dest_path)
+                        .map_err(|e| eprintln!("Additional error during delete of incompletely copied file: {:?}", e));
+                }
+                Err(e)
+            },
+        }
+    }
+
+    pub fn import_file(&mut self, relative_path: &Path, source: &Path) -> Result<(), FileIndexError> {
+        self.import_file_maybe_metadata(relative_path, source, None)
+    }
+
+
+    pub fn import_file_with_metadata(&mut self, relative_path: &Path, source: &Path, info: &FileInfo) -> Result<(), FileIndexError> {
+        self.import_file_maybe_metadata(relative_path, source, Some(info))
+    }
+
+    pub fn remove_file(&mut self, path: &Path) -> Result<(), FileIndexError> {
+        if let hash_map::Entry::Occupied(entry) = self.entries.entry(path.to_path_buf()) {
+            let path = self.path.join(path);
+            println!("Deleting {}", path.to_string_lossy());
+            if self.action_type == ActionType::Real {
+                std::fs::remove_file(&path)?;
+            }
+            entry.remove_entry();
+            Ok(())
+        } else {
+            Err(FileIndexError::FileMissing)
+        }
     }
 
     pub fn clean_old_dbs(&mut self) -> Result<(), FileIndexError> {
         let date_regex = Regex::new(r"....-..-..").unwrap();
         let mut paths: Vec<PathBuf> = self.entries.iter()
-            .map(|fi| fi.relative_path.to_owned())
+            .map(|(rel_path, _)| rel_path.to_owned())
             .filter(|p| p.starts_with("Databases"))
             .filter(|p| date_regex.is_match(p.to_string_lossy().as_ref()))
             .collect();
@@ -229,32 +304,22 @@ impl FileIndex {
         paths.sort();
         let delete_count = paths.len() - MAX_DBS;
         let to_delete = &paths[..delete_count];
-        for db in to_delete {
-            let path = self.path.join(db);
-            println!("Deleting old message database: {:?}", path);
-            std::fs::remove_file(&path)?;
-        }
+        for db in to_delete { self.remove_file(db)?; }
         Ok(())
     }
 
     pub fn mirror_from(&mut self, source_index: &FileIndex) -> Result<(), FileIndexError> {
-        let source = source_index.index_as_hash();
-        let dest = self.index_as_hash();
-
+        let source = &source_index.entries;
         // Check common files match in terms of metadata
         {
-            let mut common = dest.clone();
+            let mut common = self.entries.clone();
             common.retain(|k, _| source.contains_key(k.as_path()));
             for (rel_path, value) in &common {
                 let other = source.get(rel_path).unwrap();
                 if value != other {
                     println!("Copying file with metadata mismatch {:?}", rel_path);
-                    if let Err(e) = Self::copy_file(&source_index.path, &self.path, other) {
-                        let dest_path = self.path.join(rel_path);
-                        let _ = std::fs::remove_file(&dest_path)
-                            .map_err(|e| eprintln!("During delete of incompletely copied file: {:?}", e));
-                        return Err(e)
-                    }
+                    let source_path = source_index.path.join(rel_path);
+                    self.import_file_with_metadata(rel_path, &source_path, value)?;
                 }
             }
         }
@@ -262,39 +327,34 @@ impl FileIndex {
         // Copy missing files to archive
         {
             let mut missing = source.clone();
-            missing.retain(|k, _| !dest.contains_key(k.as_path()));
+            missing.retain(|k, _| !self.entries.contains_key(k.as_path()));
             for (rel_path, value) in &missing {
                 println!("Copying missing file: {:?}", rel_path);
-                if let Err(e) = Self::copy_file(&source_index.path, &self.path, value) {
-                    let dest_path = self.path.join(rel_path);
-                    let _ = std::fs::remove_file(&dest_path)
-                        .map_err(|e| eprintln!("During delete of incompletely copied file: {:?}", e));
-                    return Err(e)
-                }
+                let source_path = source_index.path.join(rel_path);
+                self.import_file_with_metadata(rel_path, &source_path, value)?;
             }
         }
 
-        self.clean_old_dbs()?;
-        self.reindex()
+        self.clean_old_dbs()
     }
 
     pub fn get_size_bytes(&self) -> u64 {
-        self.entries.iter().map(|fi| fi.size).fold(0, |a, b| a + b)
+        self.entries.iter().map(|(_, fi)| fi.size).fold(0, |a, b| a + b)
     }
 
-    pub fn get_deletion_candidates(&self, query: &FileQuery) -> Vec<FileInfo> {
-        let mut media_entries: Vec<FileInfo> = self.entries.iter()
-                .filter(|p| p.relative_path.starts_with("Media"))
-                .filter(|e| e.relative_path.file_name().map(|e| e != ".nomedia").unwrap_or(true))
-                .cloned()
+    pub fn get_deletion_candidates(&self, query: &FileQuery) -> Vec<(PathBuf, FileInfo)> {
+        let mut media_entries: Vec<(PathBuf, FileInfo)> = self.entries.iter()
+                .filter(|(p, _)| p.starts_with("Media"))
+                .filter(|(p, _)| p.file_name().map(|e| e != ".nomedia").unwrap_or(true))
+                .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
-        media_entries.sort_unstable_by(|a, b| query.order.compare(a, b));
+        media_entries.sort_unstable_by(|(_, a), (_, b)| query.order.compare(a, b));
         match query.limit {
             DataLimit::Infinite => { media_entries.clear(); },
             DataLimit::Bytes(limit) => {
                 let mut total: u64 = self.get_size_bytes();
                 let mut count = 0;
-                for (idx, entry) in media_entries.iter().enumerate() {
+                for (idx, (_, entry)) in media_entries.iter().enumerate() {
                     if total <= limit {
                         count = idx;
                         break;
@@ -307,31 +367,12 @@ impl FileIndex {
         media_entries
     }
 
-    pub fn filter_existing(&self, list: &Vec<FileInfo>) -> Vec<FileInfo> {
-        let index = self.index_as_hash();
-        list.iter().filter(|p| index.contains_key(p.relative_path.as_path())).cloned().collect()
+    pub fn filter_existing(&self, list: &Vec<PathBuf>) -> Vec<PathBuf> {
+        list.iter().filter(|p| self.entries.contains_key(p.as_path())).cloned().collect()
     }
 
-    fn reindex(&mut self) -> Result<(), FileIndexError> {
-        let new_entries = Self::build_index(&self.path)?;
-        self.entries = new_entries;
+    pub fn remove_files<I: IntoIterator<Item = impl AsRef<Path>>>(&mut self, files: I) -> Result<(), FileIndexError> {
+        for file in files { self.remove_file(file.as_ref())?; }
         Ok(())
-    }
-
-    pub fn delete_files_from_infos<'a, I: IntoIterator<Item = &'a FileInfo>>(&mut self, infos: I) -> Result<(), FileIndexError> {
-        let index = self.index_as_hash();
-        for other_info in infos {
-            if let Some(info) = index.get(other_info.relative_path.as_path()) {
-                if info != other_info {
-                    return Err(FileIndexError::FileMismatch);
-                }
-                let path = self.path.join(&info.relative_path);
-                println!("Deleting {}", path.to_string_lossy());
-                std::fs::remove_file(&path)?;
-            } else {
-                return Err(FileIndexError::FileMissing);
-            }
-        }
-        self.reindex()
     }
 }
