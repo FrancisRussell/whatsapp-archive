@@ -4,7 +4,17 @@ extern crate bytefmt;
 use clap::{App,Arg};
 use waa::{FileIndex, FileQuery, FileOrder, IndexType, DataLimit, ActionType, FileFilter};
 
-fn main() -> Result<(), String> {
+fn main() {
+    match main_internal() {
+        Ok(_) => {},
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        },
+    };
+}
+
+fn main_internal() -> Result<(), String> {
     let app = App::new("WhatsApp Archiver")
         .author("Francis Russell")
         .arg(Arg::with_name("WHATSAPP_STORAGE")

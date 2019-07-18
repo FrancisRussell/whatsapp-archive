@@ -13,8 +13,11 @@ const MAX_DBS: usize = 10;
 
 #[derive(Debug,Error)]
 pub enum FileIndexError {
-    #[error(display = "An IO error occurred: {:?}", _0)]
-    Io(io::Error),
+    #[error(display = "An IO error occurred involving {:?}: {}", _1, _0)]
+    Io(io::Error, PathBuf),
+
+    #[error(display = "An IO error occurred while copying: {}\nSource: {:?}\nTarget:{:?}", _0, _1, _2)]
+    Cp(io::Error, PathBuf, PathBuf),
 
     #[error(display = "The supplied folder was not a WhatsApp folder: {:?}", _0)]
     NotWhatsAppFolder(PathBuf),
@@ -22,16 +25,16 @@ pub enum FileIndexError {
     #[error(display = "The supplied folder was not an archive folder but not empty: {:?}", _0)]
     NewArchiveFolderNotEmpty(PathBuf),
 
-    #[error(display = "After a copy operation, the metadata of the two files did not match:\n{:?}\n{:?}", _0, _1)]
+    #[error(display = "After a copy operation, the metadata of the two files did not match:\nSource: {:?}\nTarget: {:?}", _0, _1)]
     FileMismatch(PathBuf, PathBuf),
 
     #[error(display = "A file was unexpectedly missing: {:?}", _0)]
     FileMissing(PathBuf),
 }
 
-impl From<io::Error> for FileIndexError {
-    fn from(e: io::Error) -> Self {
-        FileIndexError::Io(e)
+impl<P: AsRef<Path>> From<(io::Error, P)> for FileIndexError {
+    fn from(err: (io::Error, P)) -> Self {
+        FileIndexError::Io(err.0, err.1.as_ref().to_owned())
     }
 }
 
@@ -141,7 +144,7 @@ impl FileQuery {
 impl FileInfo {
     fn new(path: &Path) -> Result<FileInfo, FileIndexError> {
         let filename = path.file_name().unwrap();
-        let metadata = path.metadata()?;
+        let metadata = path.metadata().map_err(|e| (e, path))?;
         let modification_time = FileTime::from_last_modification_time(&metadata);
         let estimated_creation_date = Self::creation_date_from_name(filename.as_ref())
             .unwrap_or(NaiveDateTime::from_timestamp(modification_time.unix_seconds(),
@@ -154,8 +157,11 @@ impl FileInfo {
         Ok(result)
     }
 
-    fn set_modification_time(&self, file: &File) -> Result<(), FileIndexError> {
-        Ok(filetime::set_file_handle_times(file, None, Some(self.modification_time))?)
+    fn set_modification_time(&self, path: &Path) -> Result<(), FileIndexError> {
+        let file = File::open(&path).map_err(|e| (e, path))?;
+        let result = filetime::set_file_handle_times(&file, None, Some(self.modification_time))
+            .map_err(|e| (e, path))?;
+        Ok(result)
     }
 
     fn creation_date_from_name(filename: &Path) -> Option<NaiveDateTime> {
@@ -198,15 +204,15 @@ impl FileIndex {
             IndexType::Archive => {
                 if !path.exists() {
                     if action_type == ActionType::Real {
-                        std::fs::create_dir_all(path)?;
+                        std::fs::create_dir_all(path).map_err(|e| (e, path))?;
                     }
                 }
                 let tag_path = path.join(TAG_NAME);
                 if !tag_path.exists() {
                     if action_type == ActionType::Real {
-                        let num_entries = path.read_dir()?.count();
+                        let num_entries = path.read_dir().map_err(|e| (e, path))?.count();
                         if num_entries == 0 {
-                            std::fs::write(tag_path, &[])?;
+                            std::fs::write(&tag_path, &[]).map_err(|e| (e, &tag_path))?;
                         } else {
                             return Err(FileIndexError::NewArchiveFolderNotEmpty(path.to_owned()));
                         }
@@ -217,10 +223,10 @@ impl FileIndex {
             },
         };
         let path = if action_type == ActionType::Real {
-            path.canonicalize()?
+            path.canonicalize().map_err(|e| (e, path))?
         } else {
             if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) {
-                let parent = parent.canonicalize()?;
+                let parent = parent.canonicalize().map_err(|e| (e, parent))?;
                 parent.join(file_name).to_path_buf()
             } else {
                 path.to_path_buf()
@@ -247,12 +253,12 @@ impl FileIndex {
         remaining.push_back(self.path.clone());
         self.entries.clear();
         while let Some(path) = remaining.pop_front() {
-            for entry in path.read_dir()? {
-                let entry = entry?;
+            for entry in path.read_dir().map_err(|e| (e, &path))? {
+                let entry = entry.map_err(|e| (e, &path))?;
                 if entry.path().file_name().map(|n| n == TAG_NAME).unwrap_or(false) {
                     continue;
                 }
-                let ftype = entry.file_type()?;
+                let ftype = entry.file_type().map_err(|e| (e, entry.path()))?;
                 if ftype.is_file() {
                     let path = entry.path();
                     let info = FileInfo::new(&path)?;
@@ -274,14 +280,13 @@ impl FileIndex {
             assert!(relative_path.is_relative());
             if self.action_type == ActionType::Real {
                 if let Some(parent) = dest_path.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    std::fs::create_dir_all(parent).map_err(|e| (e, parent))?;
                 }
-                std::fs::copy(source, &dest_path)?;
+                std::fs::copy(source, &dest_path).map_err(|e| FileIndexError::Cp(e, source.to_owned(), dest_path.to_owned()))?;
                 match info {
                     None => Ok(()),
                     Some(info) => {
-                        let copied = File::open(&dest_path)?;
-                        info.set_modification_time(&copied)?;
+                        info.set_modification_time(&dest_path)?;
                         let actual_metadata = FileInfo::new(&dest_path)?;
                         if actual_metadata == *info {
                             self.entries.insert(relative_path.to_path_buf(), actual_metadata);
@@ -323,7 +328,7 @@ impl FileIndex {
             let path = self.path.join(path);
             println!("Deleting {}", path.to_string_lossy());
             if self.action_type == ActionType::Real {
-                std::fs::remove_file(&path)?;
+                std::fs::remove_file(&path).map_err(|e| (e, path))?;
             }
             entry.remove_entry();
             Ok(())
@@ -356,7 +361,7 @@ impl FileIndex {
             for (rel_path, value) in &common {
                 let other = source.get(rel_path).unwrap();
                 if value != other {
-                    println!("Copying file with metadata mismatch {:?}", rel_path);
+                    println!("Updating changed file {:?}", rel_path);
                     let source_path = source_index.path.join(rel_path);
                     self.import_file_with_metadata(rel_path, &source_path, other)?;
                 }
