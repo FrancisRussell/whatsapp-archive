@@ -344,7 +344,7 @@ impl FileIndex {
                 if value != other {
                     println!("Copying file with metadata mismatch {:?}", rel_path);
                     let source_path = source_index.path.join(rel_path);
-                    self.import_file_with_metadata(rel_path, &source_path, value)?;
+                    self.import_file_with_metadata(rel_path, &source_path, other)?;
                 }
             }
         }
