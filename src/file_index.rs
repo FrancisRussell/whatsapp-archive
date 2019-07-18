@@ -13,12 +13,26 @@ const MAX_DBS: usize = 10;
 
 #[derive(Debug,Error)]
 pub enum FileIndexError {
+    #[error(display = "An IO error occurred: {:?}", _0)]
     Io(io::Error),
-    NotWhatsAppFolder,
-    NotArchiveFolder,
-    NewArchiveFolderNotEmpty,
-    FileMismatch,
-    FileMissing,
+
+    #[error(display = "The supplied folder was not a WhatsApp folder: {:?}", _0)]
+    NotWhatsAppFolder(PathBuf),
+
+    #[error(display = "The supplied folder was not an archive folder but not empty: {:?}", _0)]
+    NewArchiveFolderNotEmpty(PathBuf),
+
+    #[error(display = "After a copy operation, the metadata of the two files did not match:\n{:?}\n{:?}", _0, _1)]
+    FileMismatch(PathBuf, PathBuf),
+
+    #[error(display = "A file was unexpectedly missing: {:?}", _0)]
+    FileMissing(PathBuf),
+}
+
+impl From<io::Error> for FileIndexError {
+    fn from(e: io::Error) -> Self {
+        FileIndexError::Io(e)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,7 +192,7 @@ impl FileIndex {
                 let db_path = path.join("Databases").join("msgstore.db.crypt12");
                 let tag_path = path.join(TAG_NAME);
                 if !db_path.exists() || tag_path.exists() {
-                    return Err(FileIndexError::NotWhatsAppFolder);
+                    return Err(FileIndexError::NotWhatsAppFolder(path.to_owned()));
                 }
             },
             IndexType::Archive => {
@@ -194,7 +208,7 @@ impl FileIndex {
                         if num_entries == 0 {
                             std::fs::write(tag_path, &[])?;
                         } else {
-                            return Err(FileIndexError::NewArchiveFolderNotEmpty);
+                            return Err(FileIndexError::NewArchiveFolderNotEmpty(path.to_owned()));
                         }
                     } else {
                         new = true;
@@ -273,7 +287,7 @@ impl FileIndex {
                             self.entries.insert(relative_path.to_path_buf(), actual_metadata);
                             Ok(())
                         } else {
-                            Err(FileIndexError::FileMismatch)
+                            Err(FileIndexError::FileMismatch(source.to_owned(), dest_path.to_owned()))
                         }
                     },
                 }
@@ -314,7 +328,7 @@ impl FileIndex {
             entry.remove_entry();
             Ok(())
         } else {
-            Err(FileIndexError::FileMissing)
+            Err(FileIndexError::FileMissing(path.to_owned()))
         }
     }
 

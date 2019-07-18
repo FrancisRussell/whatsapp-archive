@@ -4,7 +4,7 @@ extern crate bytefmt;
 use clap::{App,Arg};
 use waa::{FileIndex, FileQuery, FileOrder, IndexType, DataLimit, ActionType, FileFilter};
 
-fn main() {
+fn main() -> Result<(), String> {
     let app = App::new("WhatsApp Archiver")
         .author("Francis Russell")
         .arg(Arg::with_name("WHATSAPP_STORAGE")
@@ -54,12 +54,21 @@ fn main() {
     } else {
         ActionType::Real
     };
-    let mut wa_index = FileIndex::new(IndexType::Original, wa_folder, action_type).expect("Unable to index WhatsApp folder");
-    let mut archive_index = FileIndex::new(IndexType::Archive, archive_folder, action_type).expect("Unable to index archive folder");
+    let mut wa_index = match FileIndex::new(IndexType::Original, wa_folder, action_type) {
+        Ok(i) => i,
+        Err(e) => return Err(format!("Unable to index WhatsApp folder: {}", e)),
+    };
+    let mut archive_index = match FileIndex::new(IndexType::Archive, archive_folder, action_type) {
+        Ok(i) => i,
+        Err(e) => return Err(format!("Unable to index archive folder: {}", e)),
+    };
     let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
     println!("Archive size is currently {:.2} MB", archive_size_mb);
     println!("Mirroring new files from {} to {}...", wa_folder, archive_folder);
-    archive_index.mirror_from(&wa_index).expect("Unable to mirror WhatsApp folder");
+    match archive_index.mirror_from(&wa_index) {
+        Ok(()) => {},
+        Err(e) => return Err(format!("Error while mirroring WhatsApp folder: {}", e)),
+    };
     println!("Mirroring complete.");
     let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
     println!("Archive size is now {:.2} MB", archive_size_mb);
@@ -75,11 +84,14 @@ fn main() {
     let deletion_candidates = deletion_candidates.iter().map(|(path, _)| path).cloned().collect();
     let deletion_candidates = wa_index.filter_existing(&deletion_candidates);
     println!("Deleting {} files from WhatsApp folder...", deletion_candidates.len());
-    wa_index.remove_files(&deletion_candidates).expect("Unable to trim files from WhatsApp folder");
+    match wa_index.remove_files(&deletion_candidates) {
+        Ok(()) => {},
+        Err(e) => return Err(format!("Error while trimming files from WhatsApp folder: {}", e)),
+    };
     if !deletion_candidates.is_empty() {
         let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
         println!("WhatsApp folder size is now {:.2} MB", wa_folder_size_mb);
     }
-
+    Ok(())
 }
 
