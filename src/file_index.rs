@@ -6,6 +6,7 @@ use std::fs::File;
 use std::cmp::Ordering;
 use std::collections::hash_map;
 use std::collections::{HashMap, VecDeque};
+use std::str::FromStr;
 use chrono::{NaiveDate, NaiveTime, NaiveDateTime, Utc};
 
 const TAG_NAME: &str = ".waa";
@@ -65,6 +66,25 @@ pub enum FileOrder {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub enum ParseFileOrderError {
+    UnknownOrder,
+}
+
+impl FromStr for FileOrder {
+    type Err = ParseFileOrderError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim().to_string();
+        match s.as_ref() {
+            "largest" => Ok(FileOrder::Largest),
+            "oldest" => Ok(FileOrder::Oldest),
+            "largest_oldest" => Ok(FileOrder::LargestOldest),
+            _ => Err(ParseFileOrderError::UnknownOrder),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum DataLimit {
     Infinite,
     Bytes(u64),
@@ -85,11 +105,17 @@ impl FileOrder {
                 let now = Utc::now().naive_utc();
                 let left_offset = now.signed_duration_since(left.estimate_creation_date());
                 let right_offset = now.signed_duration_since(right.estimate_creation_date());
-                let left_val = (left.size as f64) * (left_offset.num_milliseconds() as f64);
-                let right_val = (right.size as f64) * (right_offset.num_milliseconds() as f64);
+                let left_val = Self::evaluate_largest_oldest(left.size, left_offset.num_milliseconds() as f64);
+                let right_val = Self::evaluate_largest_oldest(right.size, right_offset.num_milliseconds() as f64);
                 left_val.partial_cmp(&right_val).unwrap().reverse()
             },
         }
+    }
+
+    fn evaluate_largest_oldest(size: u64, age_ms: f64) -> f64 {
+        let age_days = age_ms / (1000.0 * 60.0 * 60.0 * 24.0);
+        let half_life_days = 30.4375;
+        (size as f64) * 2.0_f64.powf(age_days / half_life_days)
     }
 }
 

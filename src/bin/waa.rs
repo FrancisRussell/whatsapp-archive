@@ -41,8 +41,18 @@ fn main_internal() -> Result<(), String> {
         .arg(Arg::with_name("MIN_AGE_DAYS")
             .required(false)
             .long("min-age")
+            .short("m")
             .help("Minimum age of any deleted files in days")
-            .takes_value(true));
+            .takes_value(true))
+        .arg(Arg::with_name("ORDER")
+            .required(false)
+            .short("o")
+            .long("order")
+            .help("Which files to delete first:\n\
+                  \toldest - preserve the most history\n\
+                  \tlargest - remove the fewest files\n\
+                  \tlargest_oldest - tries to balance largest and oldest\n")
+            .default_value("largest_oldest"));
 
     let matches = app.get_matches();
     let wa_folder = matches.value_of("WHATSAPP_STORAGE").unwrap();
@@ -57,13 +67,14 @@ fn main_internal() -> Result<(), String> {
         .map(|v| v.parse::<u32>().expect("Unable to parse MIN_AGE_DAYS"))
         .map(|v| FileFilter::MinAgeDays(v))
         .unwrap_or(FileFilter::All);
-
     let action_type = if matches.is_present("DRY_RUN") {
         println!("Running in dry-run mode. No files will be changed.");
         ActionType::Dry
     } else {
         ActionType::Real
     };
+    let order = matches.value_of("ORDER")
+        .map(|v| v.parse::<FileOrder>().expect("Unable to parse file order")).unwrap();
     let mut wa_index = match FileIndex::new(IndexType::Original, wa_folder, action_type) {
         Ok(i) => i,
         Err(e) => return Err(format!("Unable to index WhatsApp folder: {}", e)),
@@ -87,7 +98,7 @@ fn main_internal() -> Result<(), String> {
     println!("WhatsApp folder size is currently {:.2} MB", wa_folder_size_mb);
 
     let mut query = FileQuery::new();
-    query.set_order(FileOrder::LargestOldest);
+    query.set_order(order);
     query.set_limit(limit);
     query.set_filter(min_age);
     let deletion_candidates = archive_index.get_deletion_candidates(&query);
