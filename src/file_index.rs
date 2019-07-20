@@ -9,7 +9,6 @@ use std::str::FromStr;
 use chrono::{NaiveDate, NaiveTime, NaiveDateTime, Utc};
 
 const TAG_NAME: &str = ".waa";
-const MAX_DBS: usize = 10;
 
 #[derive(Debug,Error)]
 pub enum FileIndexError {
@@ -362,18 +361,20 @@ impl FileIndex {
         }
     }
 
-    pub fn clean_old_dbs(&mut self) -> Result<(), FileIndexError> {
-        let date_regex = Regex::new(r"....-..-..").unwrap();
+    pub fn clean_old_dbs(&mut self, keep: usize) -> Result<(), FileIndexError> {
+        let db_regex = Regex::new(r"msgstore-\d{4}-\d{2}-\d{2}").unwrap();
         let mut paths: Vec<PathBuf> = self.entries.iter()
             .map(|(rel_path, _)| rel_path.to_owned())
             .filter(|p| p.starts_with("Databases"))
-            .filter(|p| date_regex.is_match(p.to_string_lossy().as_ref()))
+            .filter(|p| db_regex.is_match(p.to_string_lossy().as_ref()))
             .collect();
-        if paths.len() <= MAX_DBS { return Ok(()); }
+        if paths.len() <= keep { return Ok(()); }
         paths.sort();
-        let delete_count = paths.len() - MAX_DBS;
+        let delete_count = paths.len() - keep;
         let to_delete = &paths[..delete_count];
-        for db in to_delete { self.remove_file(db)?; }
+        println!("Removing old databases from archive");
+        for db in to_delete {
+            self.remove_file(db)?; }
         Ok(())
     }
 
@@ -408,8 +409,7 @@ impl FileIndex {
                 self.import_file_with_metadata(rel_path, &source_path, value)?;
             }
         }
-
-        self.clean_old_dbs()
+        Ok(())
     }
 
 

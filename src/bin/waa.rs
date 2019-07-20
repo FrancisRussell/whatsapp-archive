@@ -45,6 +45,7 @@ impl FromStr for OperationMode {
 fn main_internal() -> Result<(), String> {
     let app = App::new("WhatsApp Archiver")
         .author("Francis Russell")
+        .version("0.1.0")
         .arg(Arg::with_name("WHATSAPP_STORAGE")
             .short("w")
             .help("Location of WhatsApp folder")
@@ -88,7 +89,12 @@ fn main_internal() -> Result<(), String> {
                 \tbackup - updates archive from WhatsApp folder\n\
                 \ttrim - same as backup, but also removes files from WhatsApp folder\n\
                 \tsync - same as trim, but also restores files to WhatsApp folder (ONLY media)\n")
-             .default_value("backup"));
+             .default_value("backup"))
+        .arg(Arg::with_name("NUM_KEPT_DBS")
+             .short("k")
+             .long("kept-dbs")
+             .help("Number of message database backups to retain in archive")
+             .default_value("10"));
 
     let matches = app.get_matches();
     let wa_folder = matches.value_of("WHATSAPP_STORAGE").unwrap();
@@ -113,6 +119,9 @@ fn main_internal() -> Result<(), String> {
     let order = matches.value_of("ORDER")
         .map(|v| v.parse::<FileScore>().expect("Unable to parse file order")).unwrap();
 
+    let num_dbs_to_keep = matches.value_of("NUM_KEPT_DBS")
+        .map(|v| v.parse::<usize>().expect("Unable to parse number of kept databases")).unwrap();
+
     let action_type = if matches.is_present("DRY_RUN") {
         println!("Running in dry-run mode. No files will be changed.");
         ActionType::Dry
@@ -136,6 +145,10 @@ fn main_internal() -> Result<(), String> {
 
     if let Err(e) = archive_index.mirror_all(&wa_index) {
         return Err(format!("Error while mirroring WhatsApp folder: {}", e));
+    }
+
+    if let Err(e) = archive_index.clean_old_dbs(num_dbs_to_keep) {
+        return Err(format!("Error while deleting old databases from archive folder: {}", e));
     }
 
     let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
