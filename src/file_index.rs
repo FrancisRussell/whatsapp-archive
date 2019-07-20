@@ -3,7 +3,6 @@ use regex::Regex;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::fs::File;
-use std::cmp::Ordering;
 use std::collections::hash_map;
 use std::collections::{HashMap, VecDeque};
 use std::str::FromStr;
@@ -59,27 +58,27 @@ pub enum ActionType {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum FileOrder {
+pub enum FileScore {
     Largest,
     Oldest,
     LargestOldest,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum ParseFileOrderError {
+pub enum ParseFileScoreError {
     UnknownOrder,
 }
 
-impl FromStr for FileOrder {
-    type Err = ParseFileOrderError;
+impl FromStr for FileScore {
+    type Err = ParseFileScoreError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim().to_string();
         match s.as_ref() {
-            "largest" => Ok(FileOrder::Largest),
-            "oldest" => Ok(FileOrder::Oldest),
-            "largest_oldest" => Ok(FileOrder::LargestOldest),
-            _ => Err(ParseFileOrderError::UnknownOrder),
+            "largest" => Ok(FileScore::Largest),
+            "oldest" => Ok(FileScore::Oldest),
+            "largest_oldest" => Ok(FileScore::LargestOldest),
+            _ => Err(ParseFileScoreError::UnknownOrder),
         }
     }
 }
@@ -96,18 +95,15 @@ impl DataLimit {
     }
 }
 
-impl FileOrder {
-    pub fn compare(&self, left: &FileInfo, right: &FileInfo) -> Ordering {
+impl FileScore {
+    pub fn evaluate(&self, info: &FileInfo) -> f64 {
         match *self {
-            FileOrder::Largest => left.size.cmp(&right.size).reverse(),
-            FileOrder::Oldest => left.estimate_creation_date().cmp(&right.estimate_creation_date()),
-            FileOrder::LargestOldest => {
+            FileScore::Largest => info.size as f64,
+            FileScore::Oldest => info.estimate_creation_date().timestamp_millis() as f64,
+            FileScore::LargestOldest => {
                 let now = Utc::now().naive_utc();
-                let left_offset = now.signed_duration_since(left.estimate_creation_date());
-                let right_offset = now.signed_duration_since(right.estimate_creation_date());
-                let left_val = Self::evaluate_largest_oldest(left.size, left_offset.num_milliseconds() as f64);
-                let right_val = Self::evaluate_largest_oldest(right.size, right_offset.num_milliseconds() as f64);
-                left_val.partial_cmp(&right_val).unwrap().reverse()
+                let offset = now.signed_duration_since(info.estimate_creation_date());
+                Self::evaluate_largest_oldest(info.size, offset.num_milliseconds() as f64)
             },
         }
     }
@@ -140,7 +136,7 @@ impl FileFilter {
 
 #[derive(Debug)]
 pub struct FileQuery {
-    order: FileOrder,
+    order: FileScore,
     limit: DataLimit,
     filter: FileFilter,
 }
@@ -148,13 +144,13 @@ pub struct FileQuery {
 impl FileQuery {
     pub fn new() -> FileQuery {
         FileQuery {
-            order: FileOrder::Oldest,
+            order: FileScore::Oldest,
             limit: DataLimit::Infinite,
             filter: FileFilter::All,
         }
     }
 
-    pub fn set_order(&mut self, order: FileOrder) {
+    pub fn set_order(&mut self, order: FileScore) {
         self.order = order;
     }
 
@@ -419,7 +415,10 @@ impl FileIndex {
                 .filter(|(_, i)| query.filter.matches(i))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
-        media_entries.sort_unstable_by(|(_, a), (_, b)| query.order.compare(a, b));
+        media_entries.sort_unstable_by(|(_, a), (_, b)| {
+            query.order.evaluate(a).partial_cmp(&query.order.evaluate(b))
+                .map(|v| v.reverse()).unwrap()
+        });
         match query.limit {
             DataLimit::Infinite => { media_entries.clear(); },
             DataLimit::Bytes(limit) => {

@@ -2,7 +2,7 @@ extern crate clap;
 extern crate waa;
 extern crate bytefmt;
 use clap::{App,Arg};
-use waa::{FileIndex, FileQuery, FileOrder, IndexType, DataLimit, ActionType, FileFilter};
+use waa::{FileIndex, FileQuery, FileScore, IndexType, DataLimit, ActionType, FileFilter};
 
 fn main() {
     match main_internal() {
@@ -74,7 +74,7 @@ fn main_internal() -> Result<(), String> {
         ActionType::Real
     };
     let order = matches.value_of("ORDER")
-        .map(|v| v.parse::<FileOrder>().expect("Unable to parse file order")).unwrap();
+        .map(|v| v.parse::<FileScore>().expect("Unable to parse file order")).unwrap();
     let mut wa_index = match FileIndex::new(IndexType::Original, wa_folder, action_type) {
         Ok(i) => i,
         Err(e) => return Err(format!("Unable to index WhatsApp folder: {}", e)),
