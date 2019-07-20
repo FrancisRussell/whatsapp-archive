@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::fs::File;
 use std::collections::hash_map;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr;
 use chrono::{NaiveDate, NaiveTime, NaiveDateTime, Utc};
 
@@ -30,6 +30,9 @@ pub enum FileIndexError {
 
     #[error(display = "A file was unexpectedly missing: {:?}", _0)]
     FileMissing(PathBuf),
+
+    #[error(display = "An entry was unexpectedly missing from the file index (probably a bug)")]
+    IndexEntryMissing,
 }
 
 impl<P: AsRef<Path>> From<(io::Error, P)> for FileIndexError {
@@ -374,8 +377,13 @@ impl FileIndex {
         Ok(())
     }
 
-    pub fn mirror_from(&mut self, source_index: &FileIndex) -> Result<(), FileIndexError> {
-        let source = &source_index.entries;
+    pub fn mirror_specified<I: IntoIterator<Item = impl AsRef<Path>>>(&mut self, source_index: &FileIndex, files: I) -> Result<(), FileIndexError> {
+        let files: HashSet<PathBuf> = files.into_iter().map(|p| p.as_ref().to_path_buf()).collect();
+        let source: HashMap<PathBuf, FileInfo> = source_index.entries.iter()
+            .filter(|(p, _)| files.contains(p.as_path()))
+            .map(|p| (p.0.clone(), p.1.clone()))
+            .collect();
+        if files.len() != source.len() { return Err(FileIndexError::IndexEntryMissing); }
         // Check common files match in terms of metadata
         {
             let mut common = self.entries.clone();
@@ -404,11 +412,16 @@ impl FileIndex {
         self.clean_old_dbs()
     }
 
+
+    pub fn mirror_all(&mut self, source_index: &FileIndex) -> Result<(), FileIndexError> {
+        self.mirror_specified(source_index, source_index.entries.iter().map(|(p, _)| p))
+    }
+
     pub fn get_size_bytes(&self) -> u64 {
         self.entries.iter().map(|(_, fi)| fi.size).fold(0, |a, b| a + b)
     }
 
-    pub fn get_deletion_candidates(&self, query: &FileQuery) -> Vec<(PathBuf, FileInfo)> {
+    pub fn get_delete_retain_candidates(&self, query: &FileQuery) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let mut media_entries: Vec<(PathBuf, FileInfo)> = self.entries.iter()
                 .filter(|(p, _)| p.starts_with("Media"))
                 .filter(|(p, _)| p.file_name().map(|e| e != ".nomedia").unwrap_or(true))
@@ -419,8 +432,8 @@ impl FileIndex {
             query.order.evaluate(a).partial_cmp(&query.order.evaluate(b))
                 .map(|v| v.reverse()).unwrap()
         });
-        match query.limit {
-            DataLimit::Infinite => { media_entries.clear(); },
+        let (to_delete, to_retain) = match query.limit {
+            DataLimit::Infinite => { (Vec::new(), media_entries) },
             DataLimit::Bytes(limit) => {
                 let mut total: u64 = self.get_size_bytes();
                 let mut count = 0;
@@ -431,14 +444,32 @@ impl FileIndex {
                     }
                     total = total.saturating_sub(entry.size);
                 }
-                media_entries.truncate(count);
+                let to_retain = media_entries.split_off(count);
+                let to_delete = media_entries;
+                (to_delete, to_retain)
             },
-        }
-        media_entries
+        };
+        (to_delete.into_iter().map(|(p, _)| p).collect(), to_retain.into_iter().map(|(p, _)| p).collect())
+    }
+
+    pub fn get_all_paths(&self) -> Vec<PathBuf> {
+        self.entries.iter().map(|(p, _)| p.clone()).collect()
+    }
+
+    pub fn get_delete_candidates(&self, query: &FileQuery) -> Vec<PathBuf> {
+        self.get_delete_retain_candidates(query).0
+    }
+
+    pub fn get_retain_candidates(&self, query: &FileQuery) -> Vec<PathBuf> {
+        self.get_delete_retain_candidates(query).1
     }
 
     pub fn filter_existing(&self, list: &Vec<PathBuf>) -> Vec<PathBuf> {
         list.iter().filter(|p| self.entries.contains_key(p.as_path())).cloned().collect()
+    }
+
+    pub fn filter_missing(&self, list: &Vec<PathBuf>) -> Vec<PathBuf> {
+        list.iter().filter(|p| !self.entries.contains_key(p.as_path())).cloned().collect()
     }
 
     pub fn remove_files<I: IntoIterator<Item = impl AsRef<Path>>>(&mut self, files: I) -> Result<(), FileIndexError> {

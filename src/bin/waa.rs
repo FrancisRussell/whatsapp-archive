@@ -70,13 +70,13 @@ fn main_internal() -> Result<(), String> {
             .required(false)
             .long("min-age")
             .short("m")
-            .help("Minimum age of any deleted files in days")
+            .help("Minimum age of any deleted media files in days")
             .takes_value(true))
         .arg(Arg::with_name("ORDER")
             .required(false)
             .short("o")
             .long("order")
-            .help("Which files to delete first:\n\
+            .help("Which files to delete first (ONLY media):\n\
                   \toldest - preserve the most history\n\
                   \tlargest - remove the fewest files\n\
                   \tlargest_oldest - tries to balance largest and oldest\n")
@@ -87,7 +87,7 @@ fn main_internal() -> Result<(), String> {
              .help("Mode to run in:\n\
                 \tbackup - updates archive from WhatsApp folder\n\
                 \ttrim - same as backup, but also removes files from WhatsApp folder\n\
-                \tsync - same as trim, but also restores files to WhatsApp folder\n")
+                \tsync - same as trim, but also restores files to WhatsApp folder (ONLY media)\n")
              .default_value("backup"));
 
     let matches = app.get_matches();
@@ -134,10 +134,9 @@ fn main_internal() -> Result<(), String> {
     println!("Mirroring new files from {} to {}...", wa_folder, archive_folder);
     println!("Archive size is currently {:.2} MB", archive_size_mb);
 
-    match archive_index.mirror_from(&wa_index) {
-        Ok(()) => {},
-        Err(e) => return Err(format!("Error while mirroring WhatsApp folder: {}", e)),
-    };
+    if let Err(e) = archive_index.mirror_all(&wa_index) {
+        return Err(format!("Error while mirroring WhatsApp folder: {}", e));
+    }
 
     let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
     println!("Archive size is now {:.2} MB", archive_size_mb);
@@ -151,24 +150,37 @@ fn main_internal() -> Result<(), String> {
         query.set_order(order);
         query.set_limit(limit);
         query.set_filter(min_age);
-        let deletion_candidates = {
+        let (delete_candidates, retain_candidates) = {
             let deletion_source = match mode {
                 OperationMode::Trim => &wa_index,
                 OperationMode::Sync => &archive_index,
                 _ => panic!("Unexpected mode of operation"),
             };
-            deletion_source.get_deletion_candidates(&query)
+            deletion_source.get_delete_retain_candidates(&query)
         };
-        let deletion_candidates = deletion_candidates.iter().map(|(path, _)| path).cloned().collect();
-        let deletion_candidates = wa_index.filter_existing(&deletion_candidates);
-        println!("Deleting {} files from WhatsApp folder...", deletion_candidates.len());
-        match wa_index.remove_files(&deletion_candidates) {
+        let delete_candidates = wa_index.filter_existing(&delete_candidates);
+        println!("Deleting {} files from WhatsApp folder...", delete_candidates.len());
+        match wa_index.remove_files(&delete_candidates) {
             Ok(()) => {},
             Err(e) => return Err(format!("Error while trimming files from WhatsApp folder: {}", e)),
         };
-        if !deletion_candidates.is_empty() {
+        if !delete_candidates.is_empty() {
             let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
             println!("WhatsApp folder size is now {:.2} MB", wa_folder_size_mb);
+        }
+
+        if mode == OperationMode::Sync {
+            let restore_candidates = wa_index.filter_missing(&retain_candidates);
+            println!("\nRestoring {} files to WhatsApp folder...", restore_candidates.len());
+
+            if let Err(e) = wa_index.mirror_specified(&archive_index, &restore_candidates) {
+                return Err(format!("Error while restoring files to WhatsApp folder: {}", e));
+            }
+
+            if !restore_candidates.is_empty() {
+                let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
+                println!("WhatsApp folder size is now {:.2} MB", wa_folder_size_mb);
+            }
         }
     }
     println!("Done.");
