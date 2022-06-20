@@ -219,7 +219,7 @@ impl FileIndex {
         let mut new = false;
         match index_type {
             IndexType::Original => {
-                let db_path = path.join("Databases").join("msgstore.db.crypt12");
+                let db_path = path.join("Databases").join("msgstore.db.crypt14");
                 let tag_path = path.join(TAG_NAME);
                 if !db_path.exists() || tag_path.exists() {
                     return Err(FileIndexError::NotWhatsAppFolder(path.to_owned()));
