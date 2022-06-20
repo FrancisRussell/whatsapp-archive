@@ -2,13 +2,13 @@
 name = "waa"
 version = "0.1.0"
 authors = ["Francis Russell <francis@unchartedbackwaters.co.uk>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 bytefmt = "0.1.7"
 chrono = "0.4.7"
-clap = "2.33"
-err-derive = "0.1"
+clap = "3.2.5"
+err-derive = "0.3"
 filetime = "0.2.6"
 log = "0.4"
 regex = "1"
