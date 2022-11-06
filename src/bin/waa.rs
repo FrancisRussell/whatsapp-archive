@@ -1,6 +1,3 @@
-extern crate bytefmt;
-extern crate clap;
-extern crate waa;
 use std::str::FromStr;
 
 use clap::{App, Arg};
