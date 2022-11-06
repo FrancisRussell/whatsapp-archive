@@ -1,7 +1,11 @@
-#[macro_use] extern crate err_derive;
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate err_derive;
+#[macro_use]
+extern crate log;
 extern crate chrono;
 extern crate filetime;
 extern crate regex;
 mod file_index;
-pub use self::file_index::{FileIndex, FileQuery, IndexType, FileScore, DataLimit, ActionType, FileFilter, FileIndexError};
+pub use self::file_index::{
+    ActionType, DataLimit, FileFilter, FileIndex, FileIndexError, FileQuery, FileScore, IndexType,
+};

@@ -1,17 +1,18 @@
+extern crate bytefmt;
 extern crate clap;
 extern crate waa;
-extern crate bytefmt;
-use clap::{App,Arg};
-use waa::{FileIndex, FileQuery, FileScore, IndexType, DataLimit, ActionType, FileFilter};
 use std::str::FromStr;
+
+use clap::{App, Arg};
+use waa::{ActionType, DataLimit, FileFilter, FileIndex, FileQuery, FileScore, IndexType};
 
 fn main() {
     match main_internal() {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) => {
             eprintln!("{}", e);
             std::process::exit(1);
-        },
+        }
     };
 }
 
@@ -41,60 +42,79 @@ impl FromStr for OperationMode {
     }
 }
 
-
 fn main_internal() -> Result<(), String> {
     let app = App::new("WhatsApp Archiver")
         .author("Francis Russell")
         .version("0.1.0")
-        .arg(Arg::with_name("WHATSAPP_STORAGE")
-            .short('w')
-            .help("Location of WhatsApp folder")
-            .required(true)
-            .value_name("whatsapp_folder"))
-        .arg(Arg::with_name("ARCHIVE")
-            .short('a')
-            .help("Location of archive folder")
-            .required(true)
-            .value_name("archive_folder"))
-        .arg(Arg::with_name("LIMIT")
-             .short('l')
-             .help("Limit on size of WhatsApp folder with suffix e.g. 512MiB")
-             .required(false)
-             .value_name("size_limit"))
-        .arg(Arg::with_name("DRY_RUN")
-            .short('n')
-            .long("dry-run")
-            .help("Print actions without modifying filesystem")
-            .required(false)
-            .takes_value(false))
-        .arg(Arg::with_name("MIN_AGE_DAYS")
-            .required(false)
-            .long("min-age")
-            .short('m')
-            .help("Minimum age of any deleted media files in days")
-            .takes_value(true))
-        .arg(Arg::with_name("ORDER")
-            .required(false)
-            .short('o')
-            .long("order")
-            .help("Which files to delete first (ONLY media):\n\
+        .arg(
+            Arg::with_name("WHATSAPP_STORAGE")
+                .short('w')
+                .help("Location of WhatsApp folder")
+                .required(true)
+                .value_name("whatsapp_folder"),
+        )
+        .arg(
+            Arg::with_name("ARCHIVE")
+                .short('a')
+                .help("Location of archive folder")
+                .required(true)
+                .value_name("archive_folder"),
+        )
+        .arg(
+            Arg::with_name("LIMIT")
+                .short('l')
+                .help("Limit on size of WhatsApp folder with suffix e.g. 512MiB")
+                .required(false)
+                .value_name("size_limit"),
+        )
+        .arg(
+            Arg::with_name("DRY_RUN")
+                .short('n')
+                .long("dry-run")
+                .help("Print actions without modifying filesystem")
+                .required(false)
+                .takes_value(false),
+        )
+        .arg(
+            Arg::with_name("MIN_AGE_DAYS")
+                .required(false)
+                .long("min-age")
+                .short('m')
+                .help("Minimum age of any deleted media files in days")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("ORDER")
+                .required(false)
+                .short('o')
+                .long("order")
+                .help(
+                    "Which files to delete first (ONLY media):\n\
                   \toldest - preserve the most history\n\
                   \tlargest - remove the fewest files\n\
-                  \tlargest_oldest - tries to balance largest and oldest\n")
-            .default_value("largest_oldest"))
-        .arg(Arg::with_name("MODE")
-             .short('M')
-             .long("mode")
-             .help("Mode to run in:\n\
+                  \tlargest_oldest - tries to balance largest and oldest\n",
+                )
+                .default_value("largest_oldest"),
+        )
+        .arg(
+            Arg::with_name("MODE")
+                .short('M')
+                .long("mode")
+                .help(
+                    "Mode to run in:\n\
                 \tbackup - updates archive from WhatsApp folder\n\
                 \ttrim - same as backup, but also removes files from WhatsApp folder\n\
-                \tsync - same as trim, but also restores files to WhatsApp folder (ONLY media)\n")
-             .default_value("backup"))
-        .arg(Arg::with_name("NUM_KEPT_DBS")
-             .short('k')
-             .long("kept-dbs")
-             .help("Number of message database backups to retain in archive")
-             .default_value("10"));
+                \tsync - same as trim, but also restores files to WhatsApp folder (ONLY media)\n",
+                )
+                .default_value("backup"),
+        )
+        .arg(
+            Arg::with_name("NUM_KEPT_DBS")
+                .short('k')
+                .long("kept-dbs")
+                .help("Number of message database backups to retain in archive")
+                .default_value("10"),
+        );
 
     let matches = app.get_matches();
     let wa_folder = matches.value_of("WHATSAPP_STORAGE").unwrap();
@@ -104,23 +124,27 @@ fn main_internal() -> Result<(), String> {
         panic!("LIMIT must include a suffix e.g. 12MiB");
     }
 
-    let limit = matches.value_of("LIMIT")
+    let limit = matches
+        .value_of("LIMIT")
         .map(|v| bytefmt::parse(v).expect("Unable to parse LIMIT"))
-        .map(DataLimit::from_bytes).unwrap_or(DataLimit::Infinite);
+        .map(DataLimit::from_bytes)
+        .unwrap_or(DataLimit::Infinite);
 
-    let min_age = matches.value_of("MIN_AGE_DAYS")
+    let min_age = matches
+        .value_of("MIN_AGE_DAYS")
         .map(|v| v.parse::<u32>().expect("Unable to parse MIN_AGE_DAYS"))
         .map(FileFilter::MinAgeDays)
         .unwrap_or(FileFilter::All);
 
-    let mode = matches.value_of("MODE")
-        .map(|v| v.parse::<OperationMode>().expect("Unable to parse operation mode")).unwrap();
+    let mode =
+        matches.value_of("MODE").map(|v| v.parse::<OperationMode>().expect("Unable to parse operation mode")).unwrap();
 
-    let order = matches.value_of("ORDER")
-        .map(|v| v.parse::<FileScore>().expect("Unable to parse file order")).unwrap();
+    let order = matches.value_of("ORDER").map(|v| v.parse::<FileScore>().expect("Unable to parse file order")).unwrap();
 
-    let num_dbs_to_keep = matches.value_of("NUM_KEPT_DBS")
-        .map(|v| v.parse::<usize>().expect("Unable to parse number of kept databases")).unwrap();
+    let num_dbs_to_keep = matches
+        .value_of("NUM_KEPT_DBS")
+        .map(|v| v.parse::<usize>().expect("Unable to parse number of kept databases"))
+        .unwrap();
 
     let action_type = if matches.is_present("DRY_RUN") {
         println!("Running in dry-run mode. No files will be changed.");
@@ -174,7 +198,7 @@ fn main_internal() -> Result<(), String> {
         let delete_candidates = wa_index.filter_existing(&delete_candidates);
         println!("Deleting {} files from WhatsApp folder...", delete_candidates.len());
         match wa_index.remove_files(&delete_candidates) {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(e) => return Err(format!("Error while trimming files from WhatsApp folder: {}", e)),
         };
         if !delete_candidates.is_empty() {
@@ -199,4 +223,3 @@ fn main_internal() -> Result<(), String> {
     println!("Done.");
     Ok(())
 }
-
