@@ -100,17 +100,17 @@ fn main_internal() -> Result<(), String> {
     let wa_folder = matches.value_of("WHATSAPP_STORAGE").unwrap();
     let archive_folder = matches.value_of("ARCHIVE").unwrap();
 
-    if let Some(_) = matches.value_of("LIMIT").and_then(|v| v.parse::<usize>().ok()) {
+    if matches.value_of("LIMIT").and_then(|v| v.parse::<usize>().ok()).is_some() {
         panic!("LIMIT must include a suffix e.g. 12MiB");
     }
 
     let limit = matches.value_of("LIMIT")
         .map(|v| bytefmt::parse(v).expect("Unable to parse LIMIT"))
-        .map(|v| DataLimit::from_bytes(v)).unwrap_or(DataLimit::Infinite);
+        .map(DataLimit::from_bytes).unwrap_or(DataLimit::Infinite);
 
     let min_age = matches.value_of("MIN_AGE_DAYS")
         .map(|v| v.parse::<u32>().expect("Unable to parse MIN_AGE_DAYS"))
-        .map(|v| FileFilter::MinAgeDays(v))
+        .map(FileFilter::MinAgeDays)
         .unwrap_or(FileFilter::All);
 
     let mode = matches.value_of("MODE")
@@ -159,7 +159,7 @@ fn main_internal() -> Result<(), String> {
         let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
         println!("WhatsApp folder size is currently {:.2} MB", wa_folder_size_mb);
 
-        let mut query = FileQuery::new();
+        let mut query = FileQuery::default();
         query.set_order(order);
         query.set_limit(limit);
         query.set_filter(min_age);

@@ -143,15 +143,17 @@ pub struct FileQuery {
     filter: FileFilter,
 }
 
-impl FileQuery {
-    pub fn new() -> FileQuery {
+impl Default for FileQuery {
+    fn default() -> FileQuery {
         FileQuery {
             order: FileScore::Oldest,
             limit: DataLimit::Infinite,
             filter: FileFilter::All,
         }
     }
+}
 
+impl FileQuery {
     pub fn set_order(&mut self, order: FileScore) {
         self.order = order;
     }
@@ -171,7 +173,7 @@ impl FileInfo {
         let metadata = path.metadata().map_err(|e| (e, path))?;
         let modification_time = FileTime::from_last_modification_time(&metadata);
         let estimated_creation_date = Self::creation_date_from_name(filename.as_ref())
-            .unwrap_or(NaiveDateTime::from_timestamp(modification_time.unix_seconds(),
+            .unwrap_or_else(|| NaiveDateTime::from_timestamp(modification_time.unix_seconds(),
                                                      modification_time.nanoseconds()));
         let result = FileInfo {
             modification_time,
@@ -182,10 +184,10 @@ impl FileInfo {
     }
 
     fn set_modification_time(&self, path: &Path) -> Result<(), FileIndexError> {
-        let file = File::open(&path).map_err(|e| (e, path))?;
-        let result = filetime::set_file_handle_times(&file, None, Some(self.modification_time))
+        let file = File::open(path).map_err(|e| (e, path))?;
+        filetime::set_file_handle_times(&file, None, Some(self.modification_time))
             .map_err(|e| (e, path))?;
-        Ok(result)
+        Ok(())
     }
 
     fn creation_date_from_name(filename: &Path) -> Option<NaiveDateTime> {
@@ -207,7 +209,7 @@ impl FileInfo {
 
 #[derive(Debug)]
 pub struct FileIndex {
-    index_type: IndexType,
+    _index_type: IndexType,
     action_type: ActionType,
     path: PathBuf,
     entries: HashMap<PathBuf, FileInfo>,
@@ -226,17 +228,15 @@ impl FileIndex {
                 }
             },
             IndexType::Archive => {
-                if !path.exists() {
-                    if action_type == ActionType::Real {
-                        std::fs::create_dir_all(path).map_err(|e| (e, path))?;
-                    }
+                if !path.exists() && action_type == ActionType::Real {
+                    std::fs::create_dir_all(path).map_err(|e| (e, path))?;
                 }
                 let tag_path = path.join(TAG_NAME);
                 if !tag_path.exists() {
                     if action_type == ActionType::Real {
                         let num_entries = path.read_dir().map_err(|e| (e, path))?.count();
                         if num_entries == 0 {
-                            std::fs::write(&tag_path, &[]).map_err(|e| (e, &tag_path))?;
+                            std::fs::write(&tag_path, []).map_err(|e| (e, &tag_path))?;
                         } else {
                             return Err(FileIndexError::NewArchiveFolderNotEmpty(path.to_owned()));
                         }
@@ -248,17 +248,15 @@ impl FileIndex {
         };
         let path = if action_type == ActionType::Real {
             path.canonicalize().map_err(|e| (e, path))?
+        } else if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) {
+            let parent = parent.canonicalize().map_err(|e| (e, parent))?;
+            parent.join(file_name)
         } else {
-            if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) {
-                let parent = parent.canonicalize().map_err(|e| (e, parent))?;
-                parent.join(file_name).to_path_buf()
-            } else {
-                path.to_path_buf()
-            }
+            path.to_path_buf()
         };
         let mut result = FileIndex {
-            index_type,
-            path: path.to_owned(),
+            _index_type: index_type,
+            path,
             entries: HashMap::new(),
             action_type,
         };
@@ -363,8 +361,8 @@ impl FileIndex {
 
     pub fn clean_old_dbs(&mut self, keep: usize) -> Result<(), FileIndexError> {
         let db_regex = Regex::new(r"msgstore-\d{4}-\d{2}-\d{2}").unwrap();
-        let mut paths: Vec<PathBuf> = self.entries.iter()
-            .map(|(rel_path, _)| rel_path.to_owned())
+        let mut paths: Vec<PathBuf> = self.entries.keys()
+            .map(|rel_path| rel_path.to_owned())
             .filter(|p| p.starts_with("Databases"))
             .filter(|p| db_regex.is_match(p.to_string_lossy().as_ref()))
             .collect();
@@ -414,11 +412,11 @@ impl FileIndex {
 
 
     pub fn mirror_all(&mut self, source_index: &FileIndex) -> Result<(), FileIndexError> {
-        self.mirror_specified(source_index, source_index.entries.iter().map(|(p, _)| p))
+        self.mirror_specified(source_index, source_index.entries.keys())
     }
 
     pub fn get_size_bytes(&self) -> u64 {
-        self.entries.iter().map(|(_, fi)| fi.size).fold(0, |a, b| a + b)
+        self.entries.values().map(|fi| fi.size).sum()
     }
 
     pub fn get_delete_retain_candidates(&self, query: &FileQuery) -> (Vec<PathBuf>, Vec<PathBuf>) {
@@ -453,7 +451,7 @@ impl FileIndex {
     }
 
     pub fn get_all_paths(&self) -> Vec<PathBuf> {
-        self.entries.iter().map(|(p, _)| p.clone()).collect()
+        self.entries.keys().cloned().collect()
     }
 
     pub fn get_delete_candidates(&self, query: &FileQuery) -> Vec<PathBuf> {
@@ -464,11 +462,11 @@ impl FileIndex {
         self.get_delete_retain_candidates(query).1
     }
 
-    pub fn filter_existing(&self, list: &Vec<PathBuf>) -> Vec<PathBuf> {
+    pub fn filter_existing(&self, list: &[PathBuf]) -> Vec<PathBuf> {
         list.iter().filter(|p| self.entries.contains_key(p.as_path())).cloned().collect()
     }
 
-    pub fn filter_missing(&self, list: &Vec<PathBuf>) -> Vec<PathBuf> {
+    pub fn filter_missing(&self, list: &[PathBuf]) -> Vec<PathBuf> {
         list.iter().filter(|p| !self.entries.contains_key(p.as_path())).cloned().collect()
     }
 
