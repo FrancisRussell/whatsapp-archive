@@ -48,9 +48,9 @@ enum FileOrdering {
     SmallerNewer,
 }
 
-impl Into<FileScore> for FileOrdering {
-    fn into(self) -> FileScore {
-        match self {
+impl From<FileOrdering> for FileScore {
+    fn from(o: FileOrdering) -> FileScore {
+        match o {
             FileOrdering::Newer => FileScore::Newer,
             FileOrdering::Smaller => FileScore::Smaller,
             FileOrdering::SmallerNewer => FileScore::SmallerNewer,
