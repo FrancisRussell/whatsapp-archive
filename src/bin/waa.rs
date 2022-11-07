@@ -1,6 +1,6 @@
-use std::str::FromStr;
+use std::path::PathBuf;
 
-use clap::{App, Arg};
+use clap::{Parser, ValueEnum};
 use waa::{ActionType, DataLimit, FileIndex, FilePredicate, FileQuery, FileScore, IndexType};
 
 fn main() {
@@ -13,10 +13,18 @@ fn main() {
     };
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum OperationMode {
+    /// updates archive from WhatsApp folder
+    #[clap(name = "backup")]
     Backup,
+
+    /// same as backup, but also removes files from WhatsApp folder
+    #[clap(name = "trim")]
     Trim,
+
+    /// same as trim, but also restores files to WhatsApp folder (ONLY media)
+    #[clap(name = "sync")]
     Sync,
 }
 
@@ -25,142 +33,106 @@ pub enum ParseOperationModeError {
     UnknownOperationMode,
 }
 
-impl FromStr for OperationMode {
-    type Err = ParseOperationModeError;
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum FileOrdering {
+    /// keep the most contiguous history
+    #[clap(name = "newer")]
+    Newer,
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim().to_string();
-        match s.as_ref() {
-            "backup" => Ok(OperationMode::Backup),
-            "trim" => Ok(OperationMode::Trim),
-            "sync" => Ok(OperationMode::Sync),
-            _ => Err(ParseOperationModeError::UnknownOperationMode),
+    /// keep the most files
+    #[clap(name = "smaller")]
+    Smaller,
+
+    /// tries to balance between newer and smaller
+    #[clap(name = "smaller_newer")]
+    SmallerNewer,
+}
+
+impl Into<FileScore> for FileOrdering {
+    fn into(self) -> FileScore {
+        match self {
+            FileOrdering::Newer => FileScore::Newer,
+            FileOrdering::Smaller => FileScore::Smaller,
+            FileOrdering::SmallerNewer => FileScore::SmallerNewer,
         }
     }
 }
 
+// Using `bytefmt::parse` directly angers `clap`
+fn parse_byte_count(s: &str) -> Result<u64, &'static str> { bytefmt::parse(s) }
+
+#[derive(Debug, Parser)]
+#[clap(author, version, about = "WhatsApp Archiver")]
+struct Cli {
+    #[clap(short = 'w')]
+    /// Location of WhatsApp folder
+    whatsapp_folder: PathBuf,
+
+    #[clap(short = 'a')]
+    /// Location of archive folder
+    archive_folder: PathBuf,
+
+    #[clap(short='l', value_parser = parse_byte_count)]
+    /// Limit on size of WhatsApp folder with suffix e.g. 512MiB
+    size_limit: Option<u64>,
+
+    #[clap(short = 'n', long = "dry-run", action)]
+    /// Print actions without modifying filesystem
+    dry_run: bool,
+
+    #[clap(long = "keep-newer-than", value_parser = parse_duration::parse)]
+    /// Prioritise keeping files newer than this duration e.g. 7d
+    keep_newer_than: Option<std::time::Duration>,
+
+    #[clap(value_enum, short='o', long="order", default_value_t = FileOrdering::SmallerNewer)]
+    /// Which files to try to keep on phone (ONLY media)
+    order: FileOrdering,
+
+    #[clap(value_enum, short = 'M', long = "mode", default_value_t = OperationMode::Backup)]
+    /// Mode of operation
+    mode: OperationMode,
+
+    #[clap(short = 'k', long = "kept-dbs", default_value_t = 10)]
+    /// Number of message database backups to retain in archive
+    num_kept_dbs: usize,
+}
+
 fn main_internal() -> Result<(), String> {
-    let app = App::new("WhatsApp Archiver")
-        .author("Francis Russell")
-        .version("0.1.0")
-        .arg(
-            Arg::with_name("WHATSAPP_STORAGE")
-                .short('w')
-                .help("Location of WhatsApp folder")
-                .required(true)
-                .value_name("whatsapp_folder"),
-        )
-        .arg(
-            Arg::with_name("ARCHIVE")
-                .short('a')
-                .help("Location of archive folder")
-                .required(true)
-                .value_name("archive_folder"),
-        )
-        .arg(
-            Arg::with_name("LIMIT")
-                .short('l')
-                .help("Limit on size of WhatsApp folder with suffix e.g. 512MiB")
-                .required(false)
-                .value_name("size_limit"),
-        )
-        .arg(
-            Arg::with_name("DRY_RUN")
-                .short('n')
-                .long("dry-run")
-                .help("Print actions without modifying filesystem")
-                .required(false)
-                .takes_value(false),
-        )
-        .arg(
-            Arg::with_name("KEEP_NEWER_THAN_DAYS")
-                .required(false)
-                .long("keep-newer-than")
-                .help("Prioritise keeping files newer than this number of days")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("ORDER")
-                .required(false)
-                .short('o')
-                .long("order")
-                .help(
-                    "Which files to try to keep on phone (ONLY media):\n\
-                  \tnewer - keep the most history\n\
-                  \tsmaller - keep the most files\n\
-                  \tsmaller_newer - tries to balance between newer and smaller\n",
-                )
-                .default_value("smaller_newer"),
-        )
-        .arg(
-            Arg::with_name("MODE")
-                .short('M')
-                .long("mode")
-                .help(
-                    "Mode to run in:\n\
-                \tbackup - updates archive from WhatsApp folder\n\
-                \ttrim - same as backup, but also removes files from WhatsApp folder\n\
-                \tsync - same as trim, but also restores files to WhatsApp folder (ONLY media)\n",
-                )
-                .default_value("backup"),
-        )
-        .arg(
-            Arg::with_name("NUM_KEPT_DBS")
-                .short('k')
-                .long("kept-dbs")
-                .help("Number of message database backups to retain in archive")
-                .default_value("10"),
-        );
+    let cli = Cli::parse();
+    let wa_folder = cli.whatsapp_folder;
+    let archive_folder = cli.archive_folder;
 
-    let matches = app.get_matches();
-    let wa_folder = matches.value_of("WHATSAPP_STORAGE").unwrap();
-    let archive_folder = matches.value_of("ARCHIVE").unwrap();
+    let limit = cli.size_limit.map(DataLimit::from_bytes).unwrap_or(DataLimit::Infinite);
 
-    if matches.value_of("LIMIT").and_then(|v| v.parse::<usize>().ok()).is_some() {
-        panic!("LIMIT must include a suffix e.g. 12MiB");
-    }
-
-    let limit = matches
-        .value_of("LIMIT")
-        .map(|v| bytefmt::parse(v).expect("Unable to parse LIMIT"))
-        .map(DataLimit::from_bytes)
-        .unwrap_or(DataLimit::Infinite);
-
-    let priority = matches
-        .value_of("KEEP_NEWER_THAN_DAYS")
-        .map(|v| v.parse::<u32>().expect("Unable to parse KEEP_NEWER_THAN_DAYS"))
-        .map(|d| FilePredicate::AgeLessThan(chrono::Duration::days(d as i64)))
+    let priority = cli
+        .keep_newer_than
+        .map(|d| chrono::Duration::from_std(d).expect("Duration too large"))
+        .map(FilePredicate::AgeLessThan)
         .unwrap_or(FilePredicate::Constant(false));
 
-    let mode =
-        matches.value_of("MODE").map(|v| v.parse::<OperationMode>().expect("Unable to parse operation mode")).unwrap();
+    let mode = cli.mode;
+    let order: FileScore = cli.order.into();
+    let num_dbs_to_keep = cli.num_kept_dbs;
 
-    let order = matches.value_of("ORDER").map(|v| v.parse::<FileScore>().expect("Unable to parse file order")).unwrap();
-
-    let num_dbs_to_keep = matches
-        .value_of("NUM_KEPT_DBS")
-        .map(|v| v.parse::<usize>().expect("Unable to parse number of kept databases"))
-        .unwrap();
-
-    let action_type = if matches.is_present("DRY_RUN") {
+    let action_type = if cli.dry_run {
         println!("Running in dry-run mode. No files will be changed.");
         ActionType::Dry
     } else {
         ActionType::Real
     };
 
-    let mut wa_index = match FileIndex::new(IndexType::Original, wa_folder, action_type) {
+    let mut wa_index = match FileIndex::new(IndexType::Original, &wa_folder, action_type) {
         Ok(i) => i,
         Err(e) => return Err(format!("Unable to index WhatsApp folder: {}", e)),
     };
 
-    let mut archive_index = match FileIndex::new(IndexType::Archive, archive_folder, action_type) {
+    let mut archive_index = match FileIndex::new(IndexType::Archive, &archive_folder, action_type) {
         Ok(i) => i,
         Err(e) => return Err(format!("Unable to index archive folder: {}", e)),
     };
 
     let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
-    println!("Mirroring new files from {} to {}...", wa_folder, archive_folder);
+    println!("Mirroring new files from {} to {}...", wa_folder.display(), archive_folder.display());
     println!("Archive size is currently {:.2} MB", archive_size_mb);
 
     if let Err(e) = archive_index.mirror_all(&wa_index) {

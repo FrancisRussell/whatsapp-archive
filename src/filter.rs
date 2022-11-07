@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use chrono::Utc;
 
 use crate::FileInfo;
@@ -29,20 +27,6 @@ impl FileQuery {
     pub fn set_priority(&mut self, predicate: FilePredicate) { self.priority = predicate; }
 }
 
-impl FromStr for FileScore {
-    type Err = ParseFileScoreError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim();
-        match s {
-            "smaller" => Ok(FileScore::Smaller),
-            "newer" => Ok(FileScore::Newer),
-            "smaller_newer" => Ok(FileScore::SmallerNewer),
-            _ => Err(ParseFileScoreError::UnknownOrder),
-        }
-    }
-}
-
 /// Ranking function for files
 #[derive(Clone, Copy, Debug)]
 pub enum FileScore {
@@ -54,12 +38,6 @@ pub enum FileScore {
 
     /// Score decreases proportionally with size and exponentially with age
     SmallerNewer,
-}
-
-/// Error type for parsing file ordering
-#[derive(Clone, Copy, Debug)]
-pub enum ParseFileScoreError {
-    UnknownOrder,
 }
 
 impl FileScore {
