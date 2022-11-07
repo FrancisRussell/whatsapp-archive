@@ -8,13 +8,13 @@ use crate::FileInfo;
 #[derive(Debug)]
 pub struct FileQuery {
     pub(crate) order: FileScore,
-    pub(crate) limit: DataLimit,
-    pub(crate) filter: FileFilter,
+    pub(crate) data_limit: DataLimit,
+    pub(crate) priority: FilePredicate,
 }
 
 impl Default for FileQuery {
     fn default() -> FileQuery {
-        FileQuery { order: FileScore::Oldest, limit: DataLimit::Infinite, filter: FileFilter::All }
+        FileQuery { order: FileScore::Newer, data_limit: DataLimit::Infinite, priority: FilePredicate::none() }
     }
 }
 
@@ -23,10 +23,10 @@ impl FileQuery {
     pub fn set_order(&mut self, order: FileScore) { self.order = order; }
 
     /// Sets the maximum storage used by the returned files
-    pub fn set_limit(&mut self, limit: DataLimit) { self.limit = limit; }
+    pub fn set_limit(&mut self, data_limit: DataLimit) { self.data_limit = data_limit; }
 
-    /// Sets a filter for excluding files
-    pub fn set_filter(&mut self, filter: FileFilter) { self.filter = filter; }
+    /// Sets a predicate for high-priority files
+    pub fn set_priority(&mut self, predicate: FilePredicate) { self.priority = predicate; }
 }
 
 impl FromStr for FileScore {
@@ -35,9 +35,9 @@ impl FromStr for FileScore {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
         match s {
-            "largest" => Ok(FileScore::Largest),
-            "oldest" => Ok(FileScore::Oldest),
-            "largest_oldest" => Ok(FileScore::LargestOldest),
+            "smaller" => Ok(FileScore::Smaller),
+            "newer" => Ok(FileScore::Newer),
+            "smaller_newer" => Ok(FileScore::SmallerNewer),
             _ => Err(ParseFileScoreError::UnknownOrder),
         }
     }
@@ -46,14 +46,14 @@ impl FromStr for FileScore {
 /// Ranking function for files
 #[derive(Clone, Copy, Debug)]
 pub enum FileScore {
-    /// Score is proportional to file size
-    Largest,
+    /// Score is negatively proportional to file size
+    Smaller,
 
-    /// Score is proportional to file age
-    Oldest,
+    /// Score is negatively proportional to file age
+    Newer,
 
-    /// Score increases proportionally with size and exponentially with age
-    LargestOldest,
+    /// Score decreases proportionally with size and exponentially with age
+    SmallerNewer,
 }
 
 /// Error type for parsing file ordering
@@ -66,20 +66,20 @@ impl FileScore {
     /// Evaluates the score for a file (smaller is more important)
     pub fn evaluate(&self, info: &FileInfo) -> f64 {
         match *self {
-            FileScore::Largest => info.get_size() as f64,
-            FileScore::Oldest => info.estimate_creation_date().timestamp_millis() as f64,
-            FileScore::LargestOldest => {
+            FileScore::Smaller => -(info.get_size() as f64),
+            FileScore::Newer => -(info.estimate_creation_date().timestamp_millis() as f64),
+            FileScore::SmallerNewer => {
                 let now = Utc::now().naive_utc();
                 let offset = now.signed_duration_since(info.estimate_creation_date());
-                Self::evaluate_largest_oldest(info.get_size(), offset.num_milliseconds() as f64)
+                Self::evaluate_smaller_newer(info.get_size(), offset.num_milliseconds() as f64)
             }
         }
     }
 
-    fn evaluate_largest_oldest(size: u64, age_ms: f64) -> f64 {
+    fn evaluate_smaller_newer(size: u64, age_ms: f64) -> f64 {
         let age_days = age_ms / (1000.0 * 60.0 * 60.0 * 24.0);
         let half_life_days = 30.4375;
-        (size as f64) * 2.0_f64.powf(age_days / half_life_days)
+        -(size as f64) * 2.0_f64.powf(age_days / half_life_days)
     }
 }
 
@@ -100,23 +100,28 @@ impl DataLimit {
 
 /// A predicate for files
 #[derive(Debug)]
-pub enum FileFilter {
-    /// All files match
-    All,
+pub enum FilePredicate {
+    /// Always returns the specified `bool`
+    Constant(bool),
 
-    /// Only files older than the specified number of days match
-    MinAgeDays(u32),
+    /// Only files younger or equal to the specified duration
+    AgeLessThan(chrono::Duration),
 }
 
-impl FileFilter {
-    /// Returns `true` if the specified `FileInfo` matches the predicate
-    pub fn matches(&self, file: &FileInfo) -> bool {
-        match *self {
-            FileFilter::All => true,
-            FileFilter::MinAgeDays(min) => {
+impl FilePredicate {
+    /// Returns `true` for any file
+    pub fn all() -> FilePredicate { FilePredicate::Constant(true) }
+
+    /// Returns `false` for any file
+    pub fn none() -> FilePredicate { FilePredicate::Constant(false) }
+
+    pub fn matches(&self, file_info: &FileInfo) -> bool {
+        match self {
+            FilePredicate::Constant(b) => *b,
+            FilePredicate::AgeLessThan(max) => {
                 let now = Utc::now().naive_utc();
-                let age = now.signed_duration_since(file.estimate_creation_date());
-                age.num_days() >= (min as i64)
+                let age = now.signed_duration_since(file_info.estimate_creation_date());
+                age <= *max
             }
         }
     }

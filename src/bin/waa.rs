@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use clap::{App, Arg};
-use waa::{ActionType, DataLimit, FileFilter, FileIndex, FileQuery, FileScore, IndexType};
+use waa::{ActionType, DataLimit, FileIndex, FilePredicate, FileQuery, FileScore, IndexType};
 
 fn main() {
     match main_internal() {
@@ -73,11 +73,10 @@ fn main_internal() -> Result<(), String> {
                 .takes_value(false),
         )
         .arg(
-            Arg::with_name("MIN_AGE_DAYS")
+            Arg::with_name("KEEP_NEWER_THAN_DAYS")
                 .required(false)
-                .long("min-age")
-                .short('m')
-                .help("Minimum age of any deleted media files in days")
+                .long("keep-newer-than")
+                .help("Prioritise keeping files newer than this number of days")
                 .takes_value(true),
         )
         .arg(
@@ -86,12 +85,12 @@ fn main_internal() -> Result<(), String> {
                 .short('o')
                 .long("order")
                 .help(
-                    "Which files to delete first (ONLY media):\n\
-                  \toldest - preserve the most history\n\
-                  \tlargest - remove the fewest files\n\
-                  \tlargest_oldest - tries to balance largest and oldest\n",
+                    "Which files to try to keep on phone (ONLY media):\n\
+                  \tnewer - keep the most history\n\
+                  \tsmaller - keep the most files\n\
+                  \tsmaller_newer - tries to balance between newer and smaller\n",
                 )
-                .default_value("largest_oldest"),
+                .default_value("smaller_newer"),
         )
         .arg(
             Arg::with_name("MODE")
@@ -127,11 +126,11 @@ fn main_internal() -> Result<(), String> {
         .map(DataLimit::from_bytes)
         .unwrap_or(DataLimit::Infinite);
 
-    let min_age = matches
-        .value_of("MIN_AGE_DAYS")
-        .map(|v| v.parse::<u32>().expect("Unable to parse MIN_AGE_DAYS"))
-        .map(FileFilter::MinAgeDays)
-        .unwrap_or(FileFilter::All);
+    let priority = matches
+        .value_of("KEEP_NEWER_THAN_DAYS")
+        .map(|v| v.parse::<u32>().expect("Unable to parse KEEP_NEWER_THAN_DAYS"))
+        .map(|d| FilePredicate::AgeLessThan(chrono::Duration::days(d as i64)))
+        .unwrap_or(FilePredicate::Constant(false));
 
     let mode =
         matches.value_of("MODE").map(|v| v.parse::<OperationMode>().expect("Unable to parse operation mode")).unwrap();
@@ -183,7 +182,7 @@ fn main_internal() -> Result<(), String> {
         let mut query = FileQuery::default();
         query.set_order(order);
         query.set_limit(limit);
-        query.set_filter(min_age);
+        query.set_priority(priority);
         let (delete_candidates, retain_candidates) = {
             let deletion_source = match mode {
                 OperationMode::Trim => &wa_index,

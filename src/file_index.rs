@@ -266,20 +266,24 @@ impl FileIndex {
     pub fn get_size_bytes(&self) -> u64 { self.entries.values().map(|fi| fi.get_size()).sum() }
 
     pub fn get_delete_retain_candidates(&self, query: &FileQuery) -> (Vec<PathBuf>, Vec<PathBuf>) {
-        // Construct list of media files which pass filter
-        // FIXME: seems to exclude files outside the day limit ????
+        // Construct list of media files
         let mut media_entries: Vec<(PathBuf, FileInfo)> = self
             .entries
             .iter()
             .filter(|(p, _)| p.starts_with("Media"))
             .filter(|(p, _)| p.file_name().map(|e| e != ".nomedia").unwrap_or(true))
-            .filter(|(_, i)| query.filter.matches(i))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        let calculate_priority = |file_info: &FileInfo| -> (i32, f64) {
+            // We assign a higher class to the files the user specifically requested we keep
+            let class = i32::from(query.priority.matches(file_info));
+            let value = query.order.evaluate(file_info);
+            (class, value)
+        };
         media_entries.sort_unstable_by(|(_, a), (_, b)| {
-            query.order.evaluate(a).partial_cmp(&query.order.evaluate(b)).map(|v| v.reverse()).unwrap()
+            calculate_priority(a).partial_cmp(&calculate_priority(b)).expect("Unable to compute ordering")
         });
-        let (to_delete, to_retain) = match query.limit {
+        let (to_delete, to_retain) = match query.data_limit {
             DataLimit::Infinite => (Vec::new(), media_entries),
             DataLimit::Bytes(limit) => {
                 let mut total: u64 = self.get_size_bytes();
