@@ -1,11 +1,9 @@
-#[macro_use]
-extern crate err_derive;
-
-#[macro_use]
-extern crate log;
-
+mod error;
 mod file_index;
+mod file_info;
+mod filter;
 
-pub use self::file_index::{
-    ActionType, DataLimit, FileFilter, FileIndex, FileIndexError, FileQuery, FileScore, IndexType,
-};
+pub use error::FileIndexError;
+pub use file_index::{ActionType, FileIndex, IndexType};
+pub use file_info::FileInfo;
+pub use filter::{DataLimit, FileFilter, FileQuery, FileScore};

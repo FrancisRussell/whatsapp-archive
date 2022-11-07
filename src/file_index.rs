@@ -1,55 +1,14 @@
 use std::collections::{hash_map, HashMap, HashSet, VecDeque};
-use std::fs::File;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use filetime::FileTime;
+use log::warn;
 use regex::Regex;
+
+use crate::{DataLimit, FileIndexError, FileInfo, FileQuery};
 
 const TAG_NAME: &str = ".waa";
 
-#[derive(Debug, Error)]
-pub enum FileIndexError {
-    #[error(display = "An IO error occurred involving {:?}: {}", _1, _0)]
-    Io(io::Error, PathBuf),
-
-    #[error(display = "An IO error occurred while copying: {}\nSource: {:?}\nTarget:{:?}", _0, _1, _2)]
-    Cp(io::Error, PathBuf, PathBuf),
-
-    #[error(display = "The supplied folder was not a WhatsApp folder: {:?}", _0)]
-    NotWhatsAppFolder(PathBuf),
-
-    #[error(display = "The supplied folder was not an archive folder but not empty: {:?}", _0)]
-    NewArchiveFolderNotEmpty(PathBuf),
-
-    #[error(
-        display = "After a copy operation, the metadata of the two files did not match:\nSource: {:?}\nTarget: {:?}",
-        _0,
-        _1
-    )]
-    FileMismatch(PathBuf, PathBuf),
-
-    #[error(display = "A file was unexpectedly missing: {:?}", _0)]
-    FileMissing(PathBuf),
-
-    #[error(display = "An entry was unexpectedly missing from the file index (probably a bug)")]
-    IndexEntryMissing,
-}
-
-impl<P: AsRef<Path>> From<(io::Error, P)> for FileIndexError {
-    fn from(err: (io::Error, P)) -> Self { FileIndexError::Io(err.0, err.1.as_ref().to_owned()) }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileInfo {
-    modification_time: FileTime,
-    estimated_creation_date: NaiveDateTime,
-    size: u64,
-}
-
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum IndexType {
     Original,
     Archive,
@@ -59,135 +18,6 @@ pub enum IndexType {
 pub enum ActionType {
     Real,
     Dry,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum FileScore {
-    Largest,
-    Oldest,
-    LargestOldest,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum ParseFileScoreError {
-    UnknownOrder,
-}
-
-impl FromStr for FileScore {
-    type Err = ParseFileScoreError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim().to_string();
-        match s.as_ref() {
-            "largest" => Ok(FileScore::Largest),
-            "oldest" => Ok(FileScore::Oldest),
-            "largest_oldest" => Ok(FileScore::LargestOldest),
-            _ => Err(ParseFileScoreError::UnknownOrder),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum DataLimit {
-    Infinite,
-    Bytes(u64),
-}
-
-impl DataLimit {
-    pub fn from_bytes(count: u64) -> DataLimit { DataLimit::Bytes(count) }
-}
-
-impl FileScore {
-    pub fn evaluate(&self, info: &FileInfo) -> f64 {
-        match *self {
-            FileScore::Largest => info.size as f64,
-            FileScore::Oldest => info.estimate_creation_date().timestamp_millis() as f64,
-            FileScore::LargestOldest => {
-                let now = Utc::now().naive_utc();
-                let offset = now.signed_duration_since(info.estimate_creation_date());
-                Self::evaluate_largest_oldest(info.size, offset.num_milliseconds() as f64)
-            }
-        }
-    }
-
-    fn evaluate_largest_oldest(size: u64, age_ms: f64) -> f64 {
-        let age_days = age_ms / (1000.0 * 60.0 * 60.0 * 24.0);
-        let half_life_days = 30.4375;
-        (size as f64) * 2.0_f64.powf(age_days / half_life_days)
-    }
-}
-
-#[derive(Debug)]
-pub enum FileFilter {
-    All,
-    MinAgeDays(u32),
-}
-
-impl FileFilter {
-    pub fn matches(&self, file: &FileInfo) -> bool {
-        match *self {
-            FileFilter::All => true,
-            FileFilter::MinAgeDays(min) => {
-                let now = Utc::now().naive_utc();
-                let age = now.signed_duration_since(file.estimate_creation_date());
-                age.num_days() >= (min as i64)
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct FileQuery {
-    order: FileScore,
-    limit: DataLimit,
-    filter: FileFilter,
-}
-
-impl Default for FileQuery {
-    fn default() -> FileQuery {
-        FileQuery { order: FileScore::Oldest, limit: DataLimit::Infinite, filter: FileFilter::All }
-    }
-}
-
-impl FileQuery {
-    pub fn set_order(&mut self, order: FileScore) { self.order = order; }
-
-    pub fn set_limit(&mut self, limit: DataLimit) { self.limit = limit; }
-
-    pub fn set_filter(&mut self, filter: FileFilter) { self.filter = filter; }
-}
-
-impl FileInfo {
-    fn new(path: &Path) -> Result<FileInfo, FileIndexError> {
-        let filename = path.file_name().unwrap();
-        let metadata = path.metadata().map_err(|e| (e, path))?;
-        let modification_time = FileTime::from_last_modification_time(&metadata);
-        let estimated_creation_date = Self::creation_date_from_name(filename.as_ref()).unwrap_or_else(|| {
-            NaiveDateTime::from_timestamp(modification_time.unix_seconds(), modification_time.nanoseconds())
-        });
-        let result = FileInfo { modification_time, estimated_creation_date, size: metadata.len() };
-        Ok(result)
-    }
-
-    fn set_modification_time(&self, path: &Path) -> Result<(), FileIndexError> {
-        let file = File::open(path).map_err(|e| (e, path))?;
-        filetime::set_file_handle_times(&file, None, Some(self.modification_time)).map_err(|e| (e, path))?;
-        Ok(())
-    }
-
-    fn creation_date_from_name(filename: &Path) -> Option<NaiveDateTime> {
-        let day_regex = Regex::new(r"^.*-(\d{8})-WA[0-9]{4}\..+$").unwrap();
-        let file_name = filename.to_string_lossy();
-        if let Some(capture) = day_regex.captures(&file_name).and_then(|c| c.get(1)) {
-            let date_time = NaiveDate::parse_from_str(capture.as_str(), "%Y%m%d")
-                .map(|date| NaiveDateTime::new(date, NaiveTime::from_hms(0, 0, 0)));
-            date_time.ok()
-        } else {
-            None
-        }
-    }
-
-    fn estimate_creation_date(&self) -> NaiveDateTime { self.estimated_creation_date }
 }
 
 #[derive(Debug)]
@@ -410,7 +240,7 @@ impl FileIndex {
         self.mirror_specified(source_index, source_index.entries.keys())
     }
 
-    pub fn get_size_bytes(&self) -> u64 { self.entries.values().map(|fi| fi.size).sum() }
+    pub fn get_size_bytes(&self) -> u64 { self.entries.values().map(|fi| fi.get_size()).sum() }
 
     pub fn get_delete_retain_candidates(&self, query: &FileQuery) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let mut media_entries: Vec<(PathBuf, FileInfo)> = self
@@ -434,7 +264,7 @@ impl FileIndex {
                     if total <= limit {
                         break;
                     }
-                    total = total.saturating_sub(entry.size);
+                    total = total.saturating_sub(entry.get_size());
                 }
                 let to_retain = media_entries.split_off(count);
                 let to_delete = media_entries;
