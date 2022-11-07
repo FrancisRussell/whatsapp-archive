@@ -37,6 +37,8 @@ impl FileInfo {
         Ok(())
     }
 
+    /// Attempts to estimate the creation date of a file based on WhatsApp's
+    /// media file naming convention
     fn creation_date_from_name(filename: &Path) -> Option<NaiveDateTime> {
         let day_regex = Regex::new(r"^.*-(\d{8})-WA[0-9]{4}\..+$").unwrap();
         let file_name = filename.to_string_lossy();

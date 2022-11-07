@@ -5,8 +5,13 @@ use crate::FileInfo;
 /// A query for files
 #[derive(Debug)]
 pub struct FileQuery {
+    /// Function used to score each file for ordering
     pub(crate) order: FileScore,
+
+    /// The maximum storage that the files can consume
     pub(crate) data_limit: DataLimit,
+
+    /// A predicate which matches files which should be kept if possible
     pub(crate) priority: FilePredicate,
 }
 
@@ -93,6 +98,7 @@ impl FilePredicate {
     /// Returns `false` for any file
     pub fn none() -> FilePredicate { FilePredicate::Constant(false) }
 
+    /// Does the predicate match the file
     pub fn matches(&self, file_info: &FileInfo) -> bool {
         match self {
             FilePredicate::Constant(b) => *b,

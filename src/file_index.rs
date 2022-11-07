@@ -265,6 +265,7 @@ impl FileIndex {
     /// The total size of all files in the index in bytes
     pub fn get_size_bytes(&self) -> u64 { self.entries.values().map(|fi| fi.get_size()).sum() }
 
+    /// Returns which files should be added and removed to satisfy the query
     pub fn get_delete_retain_candidates(&self, query: &FileQuery) -> (Vec<PathBuf>, Vec<PathBuf>) {
         // Construct list of media files
         let mut media_entries: Vec<(PathBuf, FileInfo)> = self
@@ -306,10 +307,12 @@ impl FileIndex {
     /// Returns all paths present in the index
     pub fn get_all_paths(&self) -> Vec<PathBuf> { self.entries.keys().cloned().collect() }
 
+    /// Returns only the files which should be removed to satisfy the query
     pub fn get_delete_candidates(&self, query: &FileQuery) -> Vec<PathBuf> {
         self.get_delete_retain_candidates(query).0
     }
 
+    /// Returns only the files which should be kept to satisfy the query
     pub fn get_retain_candidates(&self, query: &FileQuery) -> Vec<PathBuf> {
         self.get_delete_retain_candidates(query).1
     }
