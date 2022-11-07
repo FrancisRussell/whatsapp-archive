@@ -4,6 +4,7 @@ use chrono::Utc;
 
 use crate::FileInfo;
 
+/// A query for files
 #[derive(Debug)]
 pub struct FileQuery {
     pub(crate) order: FileScore,
@@ -18,10 +19,13 @@ impl Default for FileQuery {
 }
 
 impl FileQuery {
+    /// Sets the scoring function used to order files
     pub fn set_order(&mut self, order: FileScore) { self.order = order; }
 
+    /// Sets the maximum storage used by the returned files
     pub fn set_limit(&mut self, limit: DataLimit) { self.limit = limit; }
 
+    /// Sets a filter for excluding files
     pub fn set_filter(&mut self, filter: FileFilter) { self.filter = filter; }
 }
 
@@ -29,8 +33,8 @@ impl FromStr for FileScore {
     type Err = ParseFileScoreError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim().to_string();
-        match s.as_ref() {
+        let s = s.trim();
+        match s {
             "largest" => Ok(FileScore::Largest),
             "oldest" => Ok(FileScore::Oldest),
             "largest_oldest" => Ok(FileScore::LargestOldest),
@@ -38,19 +42,28 @@ impl FromStr for FileScore {
         }
     }
 }
+
+/// Ranking function for files
 #[derive(Clone, Copy, Debug)]
 pub enum FileScore {
+    /// Score is proportional to file size
     Largest,
+
+    /// Score is proportional to file age
     Oldest,
+
+    /// Score increases proportionally with size and exponentially with age
     LargestOldest,
 }
 
+/// Error type for parsing file ordering
 #[derive(Clone, Copy, Debug)]
 pub enum ParseFileScoreError {
     UnknownOrder,
 }
 
 impl FileScore {
+    /// Evaluates the score for a file (smaller is more important)
     pub fn evaluate(&self, info: &FileInfo) -> f64 {
         match *self {
             FileScore::Largest => info.get_size() as f64,
@@ -70,23 +83,33 @@ impl FileScore {
     }
 }
 
+/// A limit for the amout of data consumed
 #[derive(Clone, Copy, Debug)]
 pub enum DataLimit {
+    /// No limit
     Infinite,
+
+    /// A byte count
     Bytes(u64),
 }
 
 impl DataLimit {
+    /// Constructs a `DataLimit` from a byte count
     pub fn from_bytes(count: u64) -> DataLimit { DataLimit::Bytes(count) }
 }
 
+/// A predicate for files
 #[derive(Debug)]
 pub enum FileFilter {
+    /// All files match
     All,
+
+    /// Only files older than the specified number of days match
     MinAgeDays(u32),
 }
 
 impl FileFilter {
+    /// Returns `true` if the specified `FileInfo` matches the predicate
     pub fn matches(&self, file: &FileInfo) -> bool {
         match *self {
             FileFilter::All => true,

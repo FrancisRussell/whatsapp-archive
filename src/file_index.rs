@@ -8,18 +8,23 @@ use crate::{DataLimit, FileIndexError, FileInfo, FileQuery};
 
 const TAG_NAME: &str = ".waa";
 
-#[derive(Clone, Copy, Debug)]
+/// What the file index is constructed over
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum IndexType {
+    /// An actual WhatsApp data folder
     Original,
+
+    /// The backup of a WhatsApp data folder
     Archive,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ActionType {
     Real,
     Dry,
 }
 
+/// A file index for a directory tree
 #[derive(Debug)]
 pub struct FileIndex {
     _index_type: IndexType,
@@ -29,6 +34,7 @@ pub struct FileIndex {
 }
 
 impl FileIndex {
+    /// Constructs a new index of the files at the specified path.
     pub fn new<P: AsRef<Path>>(
         index_type: IndexType, path: P, action_type: ActionType,
     ) -> Result<FileIndex, FileIndexError> {
@@ -38,6 +44,7 @@ impl FileIndex {
             IndexType::Original => {
                 let db_path = path.join("Databases").join("msgstore.db.crypt14");
                 let tag_path = path.join(TAG_NAME);
+                // We check for presence of a DB and that this is not a backup folder
                 if !db_path.exists() || tag_path.exists() {
                     return Err(FileIndexError::NotWhatsAppFolder(path.to_owned()));
                 }
@@ -77,10 +84,12 @@ impl FileIndex {
         Ok(result)
     }
 
+    /// Strips the location of the index from an absolute path
     fn get_relative_path(&self, path: &Path) -> PathBuf {
         path.strip_prefix(&self.path).expect("Unable to strip prefix").to_owned()
     }
 
+    /// Traverses the directory structure and builds the index
     fn rebuild_index(&mut self) -> Result<(), FileIndexError> {
         let mut remaining = VecDeque::new();
         remaining.push_back(self.path.clone());
@@ -107,6 +116,8 @@ impl FileIndex {
         Ok(())
     }
 
+    /// Imports the file at `path` into the index at `relative_path` optionally
+    /// overriding metadata with the supplied
     fn import_file_maybe_metadata(
         &mut self, relative_path: &Path, source: &Path, info: Option<&FileInfo>,
     ) -> Result<(), FileIndexError> {
@@ -114,6 +125,7 @@ impl FileIndex {
         let mut do_copy = || {
             assert!(relative_path.is_relative());
             if self.action_type == ActionType::Real {
+                // Create destination folder
                 if let Some(parent) = dest_path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| (e, parent))?;
                 }
@@ -122,8 +134,10 @@ impl FileIndex {
                 match info {
                     None => Ok(()),
                     Some(info) => {
+                        // Update modification time on filesystem
                         info.set_modification_time(&dest_path)?;
                         let actual_metadata = FileInfo::new(&dest_path)?;
+                        // Check that other metadata matches (e.g. file size)
                         if actual_metadata == *info {
                             self.entries.insert(relative_path.to_path_buf(), actual_metadata);
                             Ok(())
@@ -142,6 +156,7 @@ impl FileIndex {
             Ok(()) => Ok(()),
             Err(e) => {
                 if self.action_type == ActionType::Real {
+                    //TODO: no need to error if this file doesn't exist
                     let _ = std::fs::remove_file(&dest_path)
                         .map_err(|e| eprintln!("Additional error during delete of incompletely copied file: {:?}", e));
                 }
@@ -150,16 +165,20 @@ impl FileIndex {
         }
     }
 
+    /// Imports the file at `path` into the index at `relative_path`
     pub fn import_file(&mut self, relative_path: &Path, source: &Path) -> Result<(), FileIndexError> {
         self.import_file_maybe_metadata(relative_path, source, None)
     }
 
+    /// Imports the file at `path` into the index at `relative_path` with the
+    /// supplied metadata.
     pub fn import_file_with_metadata(
         &mut self, relative_path: &Path, source: &Path, info: &FileInfo,
     ) -> Result<(), FileIndexError> {
         self.import_file_maybe_metadata(relative_path, source, Some(info))
     }
 
+    /// Removes a file from the index and the filesystem
     pub fn remove_file(&mut self, path: &Path) -> Result<(), FileIndexError> {
         if let hash_map::Entry::Occupied(entry) = self.entries.entry(path.to_path_buf()) {
             let path = self.path.join(path);
@@ -174,6 +193,7 @@ impl FileIndex {
         }
     }
 
+    /// Removes all but the last `keep` WhatsApp backup databases
     pub fn clean_old_dbs(&mut self, keep: usize) -> Result<(), FileIndexError> {
         let db_regex = Regex::new(r"msgstore-\d{4}-\d{2}-\d{2}").unwrap();
         let mut paths: Vec<PathBuf> = self
@@ -196,6 +216,7 @@ impl FileIndex {
         Ok(())
     }
 
+    /// Mirrors the specified files from the supplied index into this one
     pub fn mirror_specified<I: IntoIterator<Item = impl AsRef<Path>>>(
         &mut self, source_index: &FileIndex, files: I,
     ) -> Result<(), FileIndexError> {
@@ -236,13 +257,17 @@ impl FileIndex {
         Ok(())
     }
 
+    /// Mirrors all files from the supplied index into this one
     pub fn mirror_all(&mut self, source_index: &FileIndex) -> Result<(), FileIndexError> {
         self.mirror_specified(source_index, source_index.entries.keys())
     }
 
+    /// The total size of all files in the index in bytes
     pub fn get_size_bytes(&self) -> u64 { self.entries.values().map(|fi| fi.get_size()).sum() }
 
     pub fn get_delete_retain_candidates(&self, query: &FileQuery) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        // Construct list of media files which pass filter
+        // FIXME: seems to exclude files outside the day limit ????
         let mut media_entries: Vec<(PathBuf, FileInfo)> = self
             .entries
             .iter()
@@ -274,6 +299,7 @@ impl FileIndex {
         (to_delete.into_iter().map(|(p, _)| p).collect(), to_retain.into_iter().map(|(p, _)| p).collect())
     }
 
+    /// Returns all paths present in the index
     pub fn get_all_paths(&self) -> Vec<PathBuf> { self.entries.keys().cloned().collect() }
 
     pub fn get_delete_candidates(&self, query: &FileQuery) -> Vec<PathBuf> {
@@ -284,14 +310,17 @@ impl FileIndex {
         self.get_delete_retain_candidates(query).1
     }
 
+    /// Returns all files in `list` which are present in the index
     pub fn filter_existing(&self, list: &[PathBuf]) -> Vec<PathBuf> {
         list.iter().filter(|p| self.entries.contains_key(p.as_path())).cloned().collect()
     }
 
+    /// Returns all files in `list` which are not in the index
     pub fn filter_missing(&self, list: &[PathBuf]) -> Vec<PathBuf> {
         list.iter().filter(|p| !self.entries.contains_key(p.as_path())).cloned().collect()
     }
 
+    /// Removes files from the index and filesystem
     pub fn remove_files<I: IntoIterator<Item = impl AsRef<Path>>>(&mut self, files: I) -> Result<(), FileIndexError> {
         for file in files {
             self.remove_file(file.as_ref())?;

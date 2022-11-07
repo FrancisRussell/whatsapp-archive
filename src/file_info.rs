@@ -7,6 +7,7 @@ use regex::Regex;
 
 use crate::FileIndexError;
 
+/// Represents file metadata
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileInfo {
     modification_time: FileTime,
@@ -15,8 +16,10 @@ pub struct FileInfo {
 }
 
 impl FileInfo {
+    /// Constructs a new `FileInfo` representing the metadata of the specified
+    /// file
     pub fn new(path: &Path) -> Result<FileInfo, FileIndexError> {
-        let filename = path.file_name().unwrap();
+        let filename = path.file_name().expect("Unable to get filename from path");
         let metadata = path.metadata().map_err(|e| (e, path))?;
         let modification_time = FileTime::from_last_modification_time(&metadata);
         let estimated_creation_date = Self::creation_date_from_name(filename.as_ref()).unwrap_or_else(|| {
@@ -26,6 +29,8 @@ impl FileInfo {
         Ok(result)
     }
 
+    /// Alters the modification time of the file at `path` to the one stored in
+    /// the `FileInfo`.
     pub fn set_modification_time(&self, path: &Path) -> Result<(), FileIndexError> {
         let file = File::open(path).map_err(|e| (e, path))?;
         filetime::set_file_handle_times(&file, None, Some(self.modification_time)).map_err(|e| (e, path))?;
@@ -44,7 +49,11 @@ impl FileInfo {
         }
     }
 
+    /// Estimate when this file was created. This will attempt to infer the
+    /// creation time from WhatsApp's naming convention, otherwise will use
+    /// the filesystem metadata.
     pub fn estimate_creation_date(&self) -> NaiveDateTime { self.estimated_creation_date }
 
+    /// The size of the file in bytes
     pub fn get_size(&self) -> u64 { self.size }
 }

@@ -1,33 +1,37 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use err_derive::Error;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum FileIndexError {
-    #[error(display = "An IO error occurred involving {:?}: {}", _1, _0)]
+    /// An IO error involving a path
+    #[error("An IO error occurred involving {1}: {0}")]
     Io(io::Error, PathBuf),
 
-    #[error(display = "An IO error occurred while copying: {}\nSource: {:?}\nTarget:{:?}", _0, _1, _2)]
+    /// An IO error encountered during a file copy
+    #[error("An IO error occurred while copying: {0}\nSource: {1}\nTarget:{2}")]
     Cp(io::Error, PathBuf, PathBuf),
 
-    #[error(display = "The supplied folder was not a WhatsApp folder: {:?}", _0)]
+    /// The supplied folder was not a WhatsApp data folder
+    #[error("The supplied folder was not a WhatsApp folder: {0}")]
     NotWhatsAppFolder(PathBuf),
 
-    #[error(display = "The supplied folder was not an archive folder but not empty: {:?}", _0)]
+    /// The supplied folder was neither an exising WhatsApp backup folder nor
+    /// empty
+    #[error("The supplied folder was not an archive folder but not empty: {0}")]
     NewArchiveFolderNotEmpty(PathBuf),
 
-    #[error(
-        display = "After a copy operation, the metadata of the two files did not match:\nSource: {:?}\nTarget: {:?}",
-        _0,
-        _1
-    )]
+    /// Failed to copy file metadata
+    #[error("After a copy operation, the metadata of the two files did not match:\nSource: {0}\nTarget: {1}")]
     FileMismatch(PathBuf, PathBuf),
 
-    #[error(display = "A file was unexpectedly missing: {:?}", _0)]
+    /// File not found
+    #[error("A file was unexpectedly missing: {0}")]
     FileMissing(PathBuf),
 
-    #[error(display = "An entry was unexpectedly missing from the file index (probably a bug)")]
+    /// An entry in the file index was unexpectedly missing
+    #[error("An entry was unexpectedly missing from the file index (probably a bug)")]
     IndexEntryMissing,
 }
 
