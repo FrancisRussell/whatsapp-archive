@@ -8,25 +8,33 @@ trims media files from the source.
 Usage:
 
 ``` 
-$ cargo run --release -- -a <archive_folder> -w <whatsapp_folder>
-  [-l <size_limit>] [--dry-run] [--min-age=DAYS]
+$ waa -a <archive_folder> -w <whatsapp_folder>
+  [-l <size_limit>] [--dry-run] [--keep-newer-than DURATION]
+  [-o|--order newer|smaller|smaller_newer] [-M|--mode backup|trim|sync]
+  [-k|--num-kept-dbs NUM_KEPT_DBS]
 ```
 
 e.g.
 
 ``` 
-$ cargo run --release -- -a ${HOME}/whatsapp_backup 
-  -w /mnt/phone/internal_storage/WhatsApp 
-  -l 512MiB --min-age-days=14
+$ waa -a ${HOME}/whatsapp_backup 
+  -w /mnt/phone/Android/media/com.whatsapp/WhatsApp/
+  -l 512MiB -M newer --keep-newer-than 14d
 ```
 
-All files not present in `archive_folder` will be copied from
-`whatsapp_folder` preserving file modification times.
+In all modes, all files not present in `archive_folder` will be copied from
+`whatsapp_folder` preserving file modification times. This is the only operation
+that occurs in `backup` mode.
 
-If a size limit is provided, media files from `whatsapp_folder` will be deleted
-so that the size of the folder is under the specified limit (or as close as
-possible).
+In `trim` mode, files will be removed from the WhatsApp folder to reduce its size
+to be under the specified limit.
 
-Currently the files to be deleted are chosen using the weighting `file_size *
-file_age`. This favours deleting videos over images, and older files over newer
-ones.
+In `sync` mode, files may be both removed and added from the WhatsApp folder in order
+to satisfy the `--order` and `--keep-newer-than` preferences while keeping the folder
+under the specified size limit.
+
+The order `newer` weights newer files over older ones and therefore preserves
+the most contiguous media history. The order `smaller` weights smaller files
+over larger ones and therefore will preserve smaller files like pictures before
+retaining videos. `smaller_newer` attempts to produce a balance in which
+smaller files are preserved but files also become less important with age.
