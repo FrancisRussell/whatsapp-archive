@@ -80,7 +80,7 @@ struct Cli {
     /// Print actions without modifying filesystem
     dry_run: bool,
 
-    #[clap(long = "keep-newer-than", value_parser = parse_duration::parse)]
+    #[clap(long = "keep-newer-than", value_parser = humantime::parse_duration)]
     /// Prioritise keeping files newer than this duration e.g. 7d
     keep_newer_than: Option<std::time::Duration>,
 
