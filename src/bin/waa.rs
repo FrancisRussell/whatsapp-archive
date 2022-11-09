@@ -154,15 +154,11 @@ fn main_internal() -> Result<(), String> {
         let mut query = FileQuery::default();
         query.set_order(order);
         query.set_priority(priority);
-        let limit = match limit {
-            DataLimit::Infinite => DataLimit::Infinite,
-            DataLimit::Bytes(limit) => {
-                // Reduce limit to account for non-media files in WhatsApp folder
-                let non_media_bytes = wa_index.non_media_size_bytes();
-                let media_limit = limit.saturating_sub(non_media_bytes);
-                DataLimit::Bytes(media_limit)
-            }
-        };
+        let limit = limit.map(|bytes| {
+            // Reduce limit to account for non-media files in WhatsApp folder
+            let non_media_bytes = wa_index.non_media_size_bytes();
+            bytes.saturating_sub(non_media_bytes)
+        });
         query.set_limit(limit);
 
         let (delete_candidates, retain_candidates) = {

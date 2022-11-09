@@ -79,6 +79,14 @@ pub enum DataLimit {
 impl DataLimit {
     /// Constructs a `DataLimit` from a byte count
     pub fn from_bytes(count: u64) -> DataLimit { DataLimit::Bytes(count) }
+
+    /// Maps the bytes value
+    pub fn map<F: FnOnce(u64) -> u64>(self, f: F) -> DataLimit {
+        match self {
+            DataLimit::Infinite => DataLimit::Infinite,
+            DataLimit::Bytes(count) => DataLimit::Bytes(f(count)),
+        }
+    }
 }
 
 /// A predicate for files
