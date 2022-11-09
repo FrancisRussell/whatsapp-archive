@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum FileIndexError {
+pub enum Error {
     /// An IO error involving a path
     #[error("An IO error occurred involving {1}: {0}")]
     Io(io::Error, PathBuf),
@@ -35,6 +35,6 @@ pub enum FileIndexError {
     IndexEntryMissing,
 }
 
-impl<P: AsRef<Path>> From<(io::Error, P)> for FileIndexError {
-    fn from(err: (io::Error, P)) -> Self { FileIndexError::Io(err.0, err.1.as_ref().to_owned()) }
+impl<P: AsRef<Path>> From<(io::Error, P)> for Error {
+    fn from(err: (io::Error, P)) -> Self { Error::Io(err.0, err.1.as_ref().to_owned()) }
 }

@@ -1,10 +1,11 @@
+use std::borrow::ToOwned;
 use std::collections::{hash_map, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use log::warn;
 use regex::Regex;
 
-use crate::{DataLimit, FileIndexError, FileInfo, FileQuery};
+use crate::{DataLimit, Error, FileInfo, FileQuery};
 
 const TAG_NAME: &str = ".waa";
 
@@ -35,9 +36,7 @@ pub struct FileIndex {
 
 impl FileIndex {
     /// Constructs a new index of the files at the specified path.
-    pub fn new<P: AsRef<Path>>(
-        index_type: IndexType, path: P, action_type: ActionType,
-    ) -> Result<FileIndex, FileIndexError> {
+    pub fn new<P: AsRef<Path>>(index_type: IndexType, path: P, action_type: ActionType) -> Result<FileIndex, Error> {
         let path = path.as_ref();
         let mut new = false;
         match index_type {
@@ -46,7 +45,7 @@ impl FileIndex {
                 let tag_path = path.join(TAG_NAME);
                 // We check for presence of a DB and that this is not a backup folder
                 if !db_path.exists() || tag_path.exists() {
-                    return Err(FileIndexError::NotWhatsAppFolder(path.to_owned()));
+                    return Err(Error::NotWhatsAppFolder(path.to_owned()));
                 }
             }
             IndexType::Archive => {
@@ -60,7 +59,7 @@ impl FileIndex {
                         if num_entries == 0 {
                             std::fs::write(&tag_path, []).map_err(|e| (e, &tag_path))?;
                         } else {
-                            return Err(FileIndexError::NewArchiveFolderNotEmpty(path.to_owned()));
+                            return Err(Error::NewArchiveFolderNotEmpty(path.to_owned()));
                         }
                     } else {
                         new = true;
@@ -90,14 +89,14 @@ impl FileIndex {
     }
 
     /// Traverses the directory structure and builds the index
-    fn rebuild_index(&mut self) -> Result<(), FileIndexError> {
+    fn rebuild_index(&mut self) -> Result<(), Error> {
         let mut remaining = VecDeque::new();
         remaining.push_back(self.path.clone());
         self.entries.clear();
         while let Some(path) = remaining.pop_front() {
             for entry in path.read_dir().map_err(|e| (e, &path))? {
                 let entry = entry.map_err(|e| (e, &path))?;
-                if entry.path().file_name().map(|n| n == TAG_NAME).unwrap_or(false) {
+                if entry.path().file_name().map_or(false, |n| n == TAG_NAME) {
                     continue;
                 }
                 let ftype = entry.file_type().map_err(|e| (e, entry.path()))?;
@@ -120,7 +119,7 @@ impl FileIndex {
     /// overriding metadata with the supplied
     fn import_file_maybe_metadata(
         &mut self, relative_path: &Path, source: &Path, info: Option<&FileInfo>,
-    ) -> Result<(), FileIndexError> {
+    ) -> Result<(), Error> {
         let dest_path = self.path.join(relative_path);
         let mut do_copy = || {
             assert!(relative_path.is_relative());
@@ -129,8 +128,7 @@ impl FileIndex {
                 if let Some(parent) = dest_path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| (e, parent))?;
                 }
-                std::fs::copy(source, &dest_path)
-                    .map_err(|e| FileIndexError::Cp(e, source.to_owned(), dest_path.to_owned()))?;
+                std::fs::copy(source, &dest_path).map_err(|e| Error::Cp(e, source.to_owned(), dest_path.clone()))?;
                 match info {
                     None => Ok(()),
                     Some(info) => {
@@ -142,7 +140,7 @@ impl FileIndex {
                             self.entries.insert(relative_path.to_path_buf(), actual_metadata);
                             Ok(())
                         } else {
-                            Err(FileIndexError::FileMismatch(source.to_owned(), dest_path.to_owned()))
+                            Err(Error::FileMismatch(source.to_owned(), dest_path.clone()))
                         }
                     }
                 }
@@ -166,7 +164,7 @@ impl FileIndex {
     }
 
     /// Imports the file at `path` into the index at `relative_path`
-    pub fn import_file(&mut self, relative_path: &Path, source: &Path) -> Result<(), FileIndexError> {
+    pub fn import_file(&mut self, relative_path: &Path, source: &Path) -> Result<(), Error> {
         self.import_file_maybe_metadata(relative_path, source, None)
     }
 
@@ -174,12 +172,12 @@ impl FileIndex {
     /// supplied metadata.
     pub fn import_file_with_metadata(
         &mut self, relative_path: &Path, source: &Path, info: &FileInfo,
-    ) -> Result<(), FileIndexError> {
+    ) -> Result<(), Error> {
         self.import_file_maybe_metadata(relative_path, source, Some(info))
     }
 
     /// Removes a file from the index and the filesystem
-    pub fn remove_file(&mut self, path: &Path) -> Result<(), FileIndexError> {
+    pub fn remove_file(&mut self, path: &Path) -> Result<(), Error> {
         if let hash_map::Entry::Occupied(entry) = self.entries.entry(path.to_path_buf()) {
             let path = self.path.join(path);
             println!("Deleting {}", path.to_string_lossy());
@@ -189,17 +187,17 @@ impl FileIndex {
             entry.remove_entry();
             Ok(())
         } else {
-            Err(FileIndexError::FileMissing(path.to_owned()))
+            Err(Error::FileMissing(path.to_owned()))
         }
     }
 
     /// Removes all but the last `keep` WhatsApp backup databases
-    pub fn clean_old_dbs(&mut self, keep: usize) -> Result<(), FileIndexError> {
+    pub fn clean_old_dbs(&mut self, keep: usize) -> Result<(), Error> {
         let db_regex = Regex::new(r"msgstore-\d{4}-\d{2}-\d{2}").unwrap();
         let mut paths: Vec<PathBuf> = self
             .entries
             .keys()
-            .map(|rel_path| rel_path.to_owned())
+            .map(ToOwned::to_owned)
             .filter(|p| p.starts_with("Databases"))
             .filter(|p| db_regex.is_match(p.to_string_lossy().as_ref()))
             .collect();
@@ -219,7 +217,7 @@ impl FileIndex {
     /// Mirrors the specified files from the supplied index into this one
     pub fn mirror_specified<I: IntoIterator<Item = impl AsRef<Path>>>(
         &mut self, source_index: &FileIndex, files: I,
-    ) -> Result<(), FileIndexError> {
+    ) -> Result<(), Error> {
         let files: HashSet<PathBuf> = files.into_iter().map(|p| p.as_ref().to_path_buf()).collect();
         let source: HashMap<PathBuf, FileInfo> = source_index
             .entries
@@ -228,7 +226,7 @@ impl FileIndex {
             .map(|p| (p.0.clone(), p.1.clone()))
             .collect();
         if files.len() != source.len() {
-            return Err(FileIndexError::IndexEntryMissing);
+            return Err(Error::IndexEntryMissing);
         }
         // Check common files match in terms of metadata
         {
@@ -258,16 +256,16 @@ impl FileIndex {
     }
 
     /// Mirrors all files from the supplied index into this one
-    pub fn mirror_all(&mut self, source_index: &FileIndex) -> Result<(), FileIndexError> {
+    pub fn mirror_all(&mut self, source_index: &FileIndex) -> Result<(), Error> {
         self.mirror_specified(source_index, source_index.entries.keys())
     }
 
     /// The total size of all files in the index in bytes
-    pub fn size_bytes(&self) -> u64 { self.entries.values().map(|fi| fi.get_size()).sum() }
+    pub fn size_bytes(&self) -> u64 { self.entries.values().map(FileInfo::get_size).sum() }
 
     /// Returns true if this is a media file
     fn is_media_file(path: &Path, _file_info: &FileInfo) -> bool {
-        path.starts_with("Media") && path.file_name().map(|e| e != ".nomedia").unwrap_or(true)
+        path.starts_with("Media") && path.file_name().map_or(true, |e| e != ".nomedia")
     }
 
     /// Iterator over all media files
@@ -344,7 +342,7 @@ impl FileIndex {
     }
 
     /// Removes files from the index and filesystem
-    pub fn remove_files<I: IntoIterator<Item = impl AsRef<Path>>>(&mut self, files: I) -> Result<(), FileIndexError> {
+    pub fn remove_files<I: IntoIterator<Item = impl AsRef<Path>>>(&mut self, files: I) -> Result<(), Error> {
         for file in files {
             self.remove_file(file.as_ref())?;
         }

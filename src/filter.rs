@@ -48,6 +48,7 @@ pub enum FileScore {
 impl FileScore {
     /// Evaluates the score for a file (smaller is more important)
     pub fn evaluate(&self, info: &FileInfo) -> f64 {
+        #[allow(clippy::cast_precision_loss)]
         match *self {
             FileScore::Smaller => -(info.get_size() as f64),
             FileScore::Newer => -(info.estimate_creation_date().timestamp_millis() as f64),
@@ -59,6 +60,7 @@ impl FileScore {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn evaluate_smaller_newer(size: u64, age_ms: f64) -> f64 {
         let age_days = age_ms / (1000.0 * 60.0 * 60.0 * 24.0);
         let half_life_days = 30.4375;
@@ -81,6 +83,7 @@ impl DataLimit {
     pub fn from_bytes(count: u64) -> DataLimit { DataLimit::Bytes(count) }
 
     /// Maps the bytes value
+    #[must_use]
     pub fn map<F: FnOnce(u64) -> u64>(self, f: F) -> DataLimit {
         match self {
             DataLimit::Infinite => DataLimit::Infinite,

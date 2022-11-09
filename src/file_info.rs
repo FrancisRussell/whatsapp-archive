@@ -5,7 +5,7 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use filetime::FileTime;
 use regex::Regex;
 
-use crate::FileIndexError;
+use crate::Error;
 
 /// Represents file metadata
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -18,7 +18,7 @@ pub struct FileInfo {
 impl FileInfo {
     /// Constructs a new `FileInfo` representing the metadata of the specified
     /// file
-    pub fn new(path: &Path) -> Result<FileInfo, FileIndexError> {
+    pub fn new(path: &Path) -> Result<FileInfo, Error> {
         let filename = path.file_name().expect("Unable to get filename from path");
         let metadata = path.metadata().map_err(|e| (e, path))?;
         let modification_time = FileTime::from_last_modification_time(&metadata);
@@ -31,7 +31,7 @@ impl FileInfo {
 
     /// Alters the modification time of the file at `path` to the one stored in
     /// the `FileInfo`.
-    pub fn set_modification_time(&self, path: &Path) -> Result<(), FileIndexError> {
+    pub fn set_modification_time(&self, path: &Path) -> Result<(), Error> {
         let file = File::open(path).map_err(|e| (e, path))?;
         filetime::set_file_handle_times(&file, None, Some(self.modification_time)).map_err(|e| (e, path))?;
         Ok(())
@@ -41,8 +41,8 @@ impl FileInfo {
     /// media file naming convention
     fn creation_date_from_name(filename: &Path) -> Option<NaiveDateTime> {
         let day_regex = Regex::new(r"^.*-(\d{8})-WA[0-9]{4}\..+$").unwrap();
-        let file_name = filename.to_string_lossy();
-        if let Some(capture) = day_regex.captures(&file_name).and_then(|c| c.get(1)) {
+        let filename = filename.to_string_lossy();
+        if let Some(capture) = day_regex.captures(&filename).and_then(|c| c.get(1)) {
             let date_time = NaiveDate::parse_from_str(capture.as_str(), "%Y%m%d")
                 .map(|date| NaiveDateTime::new(date, NaiveTime::from_hms(0, 0, 0)));
             date_time.ok()

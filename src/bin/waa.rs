@@ -1,3 +1,6 @@
+#![warn(clippy::pedantic)]
+#![allow(clippy::uninlined_format_args)]
+
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
@@ -102,13 +105,12 @@ fn main_internal() -> Result<(), String> {
     let wa_folder = cli.whatsapp_folder;
     let archive_folder = cli.archive_folder;
 
-    let limit = cli.size_limit.map(DataLimit::from_bytes).unwrap_or(DataLimit::Infinite);
+    let limit = cli.size_limit.map_or(DataLimit::Infinite, DataLimit::from_bytes);
 
     let priority = cli
         .keep_newer_than
         .map(|d| chrono::Duration::from_std(d).expect("Duration too large"))
-        .map(FilePredicate::AgeLessThan)
-        .unwrap_or(FilePredicate::Constant(false));
+        .map_or(FilePredicate::Constant(false), FilePredicate::AgeLessThan);
 
     let mode = cli.mode;
     let order: FileScore = cli.order.into();
@@ -165,7 +167,7 @@ fn main_internal() -> Result<(), String> {
             let deletion_source = match mode {
                 OperationMode::Trim => &wa_index,
                 OperationMode::Sync => &archive_index,
-                _ => panic!("Unexpected mode of operation"),
+                OperationMode::Backup => panic!("Delete/retain should never be hit in backup mode"),
             };
             deletion_source.get_delete_retain_candidates(&query)
         };
