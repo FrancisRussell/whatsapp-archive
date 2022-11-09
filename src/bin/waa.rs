@@ -131,9 +131,9 @@ fn main_internal() -> Result<(), String> {
         Err(e) => return Err(format!("Unable to index archive folder: {}", e)),
     };
 
-    let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
+    let archive_size = archive_index.size_bytes();
     println!("Mirroring new files from {} to {}...", wa_folder.display(), archive_folder.display());
-    println!("Archive size is currently {:.2} MB", archive_size_mb);
+    println!("Archive size is currently {}", bytefmt::format(archive_size));
 
     if let Err(e) = archive_index.mirror_all(&wa_index) {
         return Err(format!("Error while mirroring WhatsApp folder: {}", e));
@@ -143,18 +143,28 @@ fn main_internal() -> Result<(), String> {
         return Err(format!("Error while deleting old databases from archive folder: {}", e));
     }
 
-    let archive_size_mb = (archive_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
-    println!("Archive size is now {:.2} MB", archive_size_mb);
+    let archive_size = archive_index.size_bytes();
+    println!("Archive size is now {}", bytefmt::format(archive_size));
 
     if mode == OperationMode::Trim || mode == OperationMode::Sync {
         println!("\nTrimming files from WhatsApp folder...");
-        let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
-        println!("WhatsApp folder size is currently {:.2} MB", wa_folder_size_mb);
+        let wa_folder_size = wa_index.size_bytes();
+        println!("WhatsApp folder size is currently {}", bytefmt::format(wa_folder_size));
 
         let mut query = FileQuery::default();
         query.set_order(order);
-        query.set_limit(limit);
         query.set_priority(priority);
+        let limit = match limit {
+            DataLimit::Infinite => DataLimit::Infinite,
+            DataLimit::Bytes(limit) => {
+                // Reduce limit to account for non-media files in WhatsApp folder
+                let non_media_bytes = wa_index.non_media_size_bytes();
+                let media_limit = limit.saturating_sub(non_media_bytes);
+                DataLimit::Bytes(media_limit)
+            }
+        };
+        query.set_limit(limit);
+
         let (delete_candidates, retain_candidates) = {
             let deletion_source = match mode {
                 OperationMode::Trim => &wa_index,
@@ -170,8 +180,8 @@ fn main_internal() -> Result<(), String> {
             Err(e) => return Err(format!("Error while trimming files from WhatsApp folder: {}", e)),
         };
         if !delete_candidates.is_empty() {
-            let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
-            println!("WhatsApp folder size is now {:.2} MB", wa_folder_size_mb);
+            let wa_folder_size = wa_index.size_bytes();
+            println!("WhatsApp folder size is now {}", bytefmt::format(wa_folder_size));
         }
 
         if mode == OperationMode::Sync {
@@ -183,8 +193,8 @@ fn main_internal() -> Result<(), String> {
             }
 
             if !restore_candidates.is_empty() {
-                let wa_folder_size_mb = (wa_index.get_size_bytes() as f64) / (1024.0 * 1024.0);
-                println!("WhatsApp folder size is now {:.2} MB", wa_folder_size_mb);
+                let wa_folder_size = wa_index.size_bytes();
+                println!("WhatsApp folder size is now {}", bytefmt::format(wa_folder_size));
             }
         }
     }

@@ -263,18 +263,34 @@ impl FileIndex {
     }
 
     /// The total size of all files in the index in bytes
-    pub fn get_size_bytes(&self) -> u64 { self.entries.values().map(|fi| fi.get_size()).sum() }
+    pub fn size_bytes(&self) -> u64 { self.entries.values().map(|fi| fi.get_size()).sum() }
+
+    /// Returns true if this is a media file
+    fn is_media_file(path: &Path, _file_info: &FileInfo) -> bool {
+        path.starts_with("Media") && path.file_name().map(|e| e != ".nomedia").unwrap_or(true)
+    }
+
+    /// Iterator over all media files
+    fn media_files(&self) -> impl Iterator<Item = (&Path, &FileInfo)> {
+        self.entries.iter().filter(|(p, fi)| Self::is_media_file(p, fi)).map(|(p, fi)| (p.as_path(), fi))
+    }
+
+    /// Iterator over non-media files
+    fn non_media_files(&self) -> impl Iterator<Item = (&Path, &FileInfo)> {
+        self.entries.iter().filter(|(p, fi)| !Self::is_media_file(p, fi)).map(|(p, fi)| (p.as_path(), fi))
+    }
+
+    /// Size of all media files in the index
+    pub fn media_size_bytes(&self) -> u64 { self.media_files().map(|(_p, fi)| fi.get_size()).sum() }
+
+    /// Size of all non-media files in the index
+    pub fn non_media_size_bytes(&self) -> u64 { self.non_media_files().map(|(_p, fi)| fi.get_size()).sum() }
 
     /// Returns which files should be added and removed to satisfy the query
     pub fn get_delete_retain_candidates(&self, query: &FileQuery) -> (Vec<PathBuf>, Vec<PathBuf>) {
         // Construct list of media files
-        let mut media_entries: Vec<(PathBuf, FileInfo)> = self
-            .entries
-            .iter()
-            .filter(|(p, _)| p.starts_with("Media"))
-            .filter(|(p, _)| p.file_name().map(|e| e != ".nomedia").unwrap_or(true))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut media_entries: Vec<(PathBuf, FileInfo)> =
+            self.media_files().map(|(k, v)| (k.to_path_buf(), v.clone())).collect();
         let calculate_priority = |file_info: &FileInfo| -> (i32, f64) {
             // We assign a higher class to the files the user specifically requested we keep
             let class = i32::from(query.priority.matches(file_info));
@@ -287,7 +303,7 @@ impl FileIndex {
         let (to_delete, to_retain) = match query.data_limit {
             DataLimit::Infinite => (Vec::new(), media_entries),
             DataLimit::Bytes(limit) => {
-                let mut total: u64 = self.get_size_bytes();
+                let mut total: u64 = self.media_size_bytes();
                 let mut count = 0;
                 for (idx, (_, entry)) in media_entries.iter().enumerate() {
                     count = idx;
