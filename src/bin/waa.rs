@@ -4,16 +4,14 @@
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
-use waa::{ActionType, DataLimit, FileIndex, FilePredicate, FileQuery, FileScore, IndexType};
+use thiserror::Error;
+use waa::{ActionType, DataLimit, Error, FileIndex, FilePredicate, FileQuery, FileScore, IndexType};
 
 fn main() {
-    match main_internal() {
-        Ok(_) => {}
-        Err(e) => {
-            eprintln!("{}", e);
-            std::process::exit(1);
-        }
-    };
+    if let Err(e) = main_internal() {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -100,7 +98,30 @@ struct Cli {
     num_kept_dbs: usize,
 }
 
-fn main_internal() -> Result<(), String> {
+#[derive(Debug, Error)]
+enum AppError {
+    /// Error building a file index
+    #[error("Unable to build index of {0}: {1}")]
+    BuildIndex(PathBuf, Error),
+
+    /// Failure during file mirroring to backup
+    #[error("Unable to mirror files to archive: {0}")]
+    MirrorToArchive(Error),
+
+    /// Failure while trimming files from WhatsApp folder
+    #[error("Unable to trim files from WhatsApp folder: {0}")]
+    TrimWhatsApp(Error),
+
+    /// Failure while cleaning up archive
+    #[error("Unable to clean unnecessary files from archive folder: {0}")]
+    TidyArchive(Error),
+
+    /// Failure while restoring files to WhatsApp folder
+    #[error("Unable to restore files to WhatsApp folder: {0}")]
+    RestoreToWhatsApp(Error),
+}
+
+fn main_internal() -> Result<(), AppError> {
     let cli = Cli::parse();
     let wa_folder = cli.whatsapp_folder;
     let archive_folder = cli.archive_folder;
@@ -123,27 +144,18 @@ fn main_internal() -> Result<(), String> {
         ActionType::Real
     };
 
-    let mut wa_index = match FileIndex::new(IndexType::Original, &wa_folder, action_type) {
-        Ok(i) => i,
-        Err(e) => return Err(format!("Unable to index WhatsApp folder: {}", e)),
-    };
+    let mut wa_index = FileIndex::new(IndexType::Original, &wa_folder, action_type)
+        .map_err(|e| AppError::BuildIndex(wa_folder.clone(), e))?;
 
-    let mut archive_index = match FileIndex::new(IndexType::Archive, &archive_folder, action_type) {
-        Ok(i) => i,
-        Err(e) => return Err(format!("Unable to index archive folder: {}", e)),
-    };
+    let mut archive_index = FileIndex::new(IndexType::Archive, &archive_folder, action_type)
+        .map_err(|e| AppError::BuildIndex(wa_folder.clone(), e))?;
 
     let archive_size = archive_index.size_bytes();
     println!("Mirroring new files from {} to {}...", wa_folder.display(), archive_folder.display());
     println!("Archive size is currently {}", bytefmt::format(archive_size));
 
-    if let Err(e) = archive_index.mirror_all(&wa_index) {
-        return Err(format!("Error while mirroring WhatsApp folder: {}", e));
-    }
-
-    if let Err(e) = archive_index.clean_old_dbs(num_dbs_to_keep) {
-        return Err(format!("Error while deleting old databases from archive folder: {}", e));
-    }
+    archive_index.mirror_all(&wa_index).map_err(AppError::MirrorToArchive)?;
+    archive_index.clean_old_dbs(num_dbs_to_keep).map_err(AppError::TidyArchive)?;
 
     let archive_size = archive_index.size_bytes();
     println!("Archive size is now {}", bytefmt::format(archive_size));
@@ -173,10 +185,8 @@ fn main_internal() -> Result<(), String> {
         };
         let delete_candidates = wa_index.filter_existing(&delete_candidates);
         println!("Deleting {} files from WhatsApp folder...", delete_candidates.len());
-        match wa_index.remove_files(&delete_candidates) {
-            Ok(()) => {}
-            Err(e) => return Err(format!("Error while trimming files from WhatsApp folder: {}", e)),
-        };
+
+        wa_index.remove_files(&delete_candidates).map_err(AppError::TrimWhatsApp)?;
         if !delete_candidates.is_empty() {
             let wa_folder_size = wa_index.size_bytes();
             println!("WhatsApp folder size is now {}", bytefmt::format(wa_folder_size));
@@ -185,10 +195,7 @@ fn main_internal() -> Result<(), String> {
         if mode == OperationMode::Sync {
             let restore_candidates = wa_index.filter_missing(&retain_candidates);
             println!("\nRestoring {} files to WhatsApp folder...", restore_candidates.len());
-
-            if let Err(e) = wa_index.mirror_specified(&archive_index, &restore_candidates) {
-                return Err(format!("Error while restoring files to WhatsApp folder: {}", e));
-            }
+            wa_index.mirror_specified(&archive_index, &restore_candidates).map_err(AppError::RestoreToWhatsApp)?;
 
             if !restore_candidates.is_empty() {
                 let wa_folder_size = wa_index.size_bytes();
