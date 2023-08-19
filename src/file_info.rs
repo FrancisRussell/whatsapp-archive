@@ -23,7 +23,8 @@ impl FileInfo {
         let metadata = path.metadata().map_err(|e| (e, path))?;
         let modification_time = FileTime::from_last_modification_time(&metadata);
         let estimated_creation_date = Self::creation_date_from_name(filename.as_ref()).unwrap_or_else(|| {
-            NaiveDateTime::from_timestamp(modification_time.unix_seconds(), modification_time.nanoseconds())
+            NaiveDateTime::from_timestamp_opt(modification_time.unix_seconds(), modification_time.nanoseconds())
+                .expect("Timestamp conversion falure")
         });
         let result = FileInfo { modification_time, estimated_creation_date, size: metadata.len() };
         Ok(result)
@@ -44,7 +45,7 @@ impl FileInfo {
         let filename = filename.to_string_lossy();
         if let Some(capture) = day_regex.captures(&filename).and_then(|c| c.get(1)) {
             let date_time = NaiveDate::parse_from_str(capture.as_str(), "%Y%m%d")
-                .map(|date| NaiveDateTime::new(date, NaiveTime::from_hms(0, 0, 0)));
+                .map(|date| NaiveDateTime::new(date, NaiveTime::MIN));
             date_time.ok()
         } else {
             None
