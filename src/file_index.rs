@@ -41,10 +41,17 @@ impl FileIndex {
         let mut new = false;
         match index_type {
             IndexType::Original => {
-                let db_path = path.join("Databases").join("msgstore.db.crypt14");
+                let mut found_db = false;
+                for suffix in &["crypt14", "crypt15"] {
+                    let db_path = path.join("Databases").join(format!("msgstore.db.{}", suffix));
+                    if db_path.exists() {
+                        found_db = true;
+                        break;
+                    }
+                }
                 let tag_path = path.join(TAG_NAME);
                 // We check for presence of a DB and that this is not a backup folder
-                if !db_path.exists() || tag_path.exists() {
+                if !found_db || tag_path.exists() {
                     return Err(Error::NotWhatsAppFolder(path.to_owned()));
                 }
             }
