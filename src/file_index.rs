@@ -1,7 +1,8 @@
 use std::borrow::ToOwned;
-use std::collections::{hash_map, HashMap, HashSet, VecDeque};
+use std::collections::{hash_map, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
+use chrono::NaiveDate;
 use log::warn;
 use regex::Regex;
 
@@ -198,23 +199,36 @@ impl FileIndex {
         }
     }
 
-    /// Removes all but the last `keep` WhatsApp backup databases
+    /// Parses the supplied string as a WhatsApp intra-filename date or panics.
+    fn parse_date_or_fail(date: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .unwrap_or_else(|e| panic!("Unable to parse `{}` as date: {}", date, e))
+    }
+
+    /// Removes all but the last `keep` full WhatsApp backup databases
     pub fn clean_old_dbs(&mut self, keep: usize) -> Result<(), Error> {
-        let db_regex = Regex::new(r"msgstore-\d{4}-\d{2}-\d{2}").unwrap();
-        let mut paths: Vec<PathBuf> = self
+        let db_regex = Regex::new(r"msgstore(?P<incremental>-increment-\d+)?-(<?P<date>\d{4}-\d{2}-\d{2})\.")
+            .expect("Invalid database name regex");
+        let path_dates: Vec<(PathBuf, NaiveDate)> = self
             .entries
             .keys()
-            .map(ToOwned::to_owned)
             .filter(|p| p.starts_with("Databases"))
-            .filter(|p| db_regex.is_match(p.to_string_lossy().as_ref()))
+            .filter_map(|p| {
+                db_regex.captures(&p.to_string_lossy()).map(|captures| {
+                    (
+                        p.clone(),
+                        Self::parse_date_or_fail(captures.name("date").expect("Date regex capture missing").as_str()),
+                    )
+                })
+            })
             .collect();
-        if paths.len() <= keep {
+        let unique_dates: BTreeSet<_> = path_dates.iter().map(|(_, date)| std::cmp::Reverse(*date)).collect();
+        if unique_dates.len() <= keep {
             return Ok(());
         }
-        paths.sort();
-        let delete_count = paths.len() - keep;
-        let to_delete = &paths[..delete_count];
-        println!("Removing old databases from archive");
+        let oldest_date_to_keep = unique_dates.into_iter().map(|d| d.0).take(keep).last().unwrap_or(NaiveDate::MAX);
+        let to_delete: Vec<_> =
+            path_dates.iter().filter(|(_, date)| *date < oldest_date_to_keep).map(|(path, _)| path).collect();
         for db in to_delete {
             self.remove_file(db)?;
         }
