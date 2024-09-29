@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 use log::warn;
+use rand::Rng;
 use regex::Regex;
 
 use crate::{DataLimit, Error, FileInfo, FileQuery};
@@ -123,6 +124,30 @@ impl FileIndex {
         Ok(())
     }
 
+    /// Attempts to copy a file in a way that minimizes the chance that a
+    /// partially written file ends up at the destination path if an IO
+    /// error occurs.
+    fn safer_copy(source_path: &Path, dest_path: &Path) -> Result<(), Error> {
+        let dest_path_temp = {
+            let filename = dest_path.file_name().expect("Unable to determine destination filename");
+            let parent = dest_path.parent().expect("Unable to determine parent folder of destination file");
+            let random: u32 = rand::thread_rng().gen();
+            let temp_filename = format!("{}.{:x}.waa.tmp", filename.to_string_lossy(), random);
+            parent.join(temp_filename)
+        };
+        if let Err(e) = std::fs::copy(source_path, &dest_path_temp)
+            .map_err(|e| Error::Cp(e, source_path.to_owned(), dest_path_temp.clone()))
+            .and_then(|_| {
+                std::fs::rename(&dest_path_temp, dest_path)
+                    .map_err(|e| Error::Mv(e, dest_path_temp.clone(), dest_path.to_owned()))
+            })
+        {
+            let _ = std::fs::remove_file(dest_path_temp);
+            return Err(e);
+        }
+        Ok(())
+    }
+
     /// Imports the file at `path` into the index at `relative_path` optionally
     /// overriding metadata with the supplied
     fn import_file_maybe_metadata(
@@ -136,7 +161,7 @@ impl FileIndex {
                 if let Some(parent) = dest_path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| (e, parent))?;
                 }
-                std::fs::copy(source, &dest_path).map_err(|e| Error::Cp(e, source.to_owned(), dest_path.clone()))?;
+                Self::safer_copy(source, &dest_path)?;
                 match info {
                     None => Ok(()),
                     Some(info) => {

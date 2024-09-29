@@ -13,6 +13,10 @@ pub enum Error {
     #[error("An IO error occurred while copying: {0}\nSource: {1}\nTarget:{2}")]
     Cp(io::Error, PathBuf, PathBuf),
 
+    /// An IO error encountered during a file rename
+    #[error("An IO error occurred while renaming: {0}\nSource: {1}\nTarget:{2}")]
+    Mv(io::Error, PathBuf, PathBuf),
+
     /// The supplied folder was not a WhatsApp data folder
     #[error("The supplied folder was not a WhatsApp folder: {0}")]
     NotWhatsAppFolder(PathBuf),

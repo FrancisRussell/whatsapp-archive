@@ -11,5 +11,6 @@ clap = { features = [ "derive" ], version = "4.0.22" }
 filetime = "0.2.6"
 humantime = "2.1.0"
 log = "0.4"
+rand = "0.8.5"
 regex = "1.7"
 thiserror = "1.0.37"
