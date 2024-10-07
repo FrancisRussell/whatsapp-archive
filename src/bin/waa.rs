@@ -155,6 +155,7 @@ fn main_internal() -> Result<(), AppError> {
     println!("Archive size is currently {}", bytefmt::format(archive_size));
 
     archive_index.mirror_all(&wa_index).map_err(AppError::MirrorToArchive)?;
+    archive_index.clean_old_backups().map_err(AppError::TidyArchive)?;
     archive_index.clean_old_dbs(num_dbs_to_keep).map_err(AppError::TidyArchive)?;
 
     let archive_size = archive_index.size_bytes();

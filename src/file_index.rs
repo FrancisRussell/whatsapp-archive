@@ -3,6 +3,7 @@ use std::collections::{hash_map, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
+use filetime::FileTime;
 use log::warn;
 use rand::Rng;
 use regex::Regex;
@@ -228,6 +229,53 @@ impl FileIndex {
     fn parse_date_or_fail(date: &str) -> NaiveDate {
         NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .unwrap_or_else(|e| panic!("Unable to parse `{}` as date: {}", date, e))
+    }
+
+    /// Gets the filename prefix for a path
+    fn determine_filename_prefix(path: &Path) -> String {
+        let filename =
+            path.file_name().unwrap_or_else(|| panic!("Unable to determine filename of file: {}", path.display()));
+        let filename = filename.to_str().unwrap_or_else(|| panic!("Filename is invalid UTF8: {:?}", filename));
+        let prefix = filename.split('.').next().unwrap_or(filename).to_string();
+        prefix
+    }
+
+    /// Removes old files from the `Backups` folder.
+    ///
+    /// This should correctly handle the case where the file extension changes
+    /// since only the most recent file for a given prefix is kept. It won't
+    /// handle the case where WhatsApp removes or changes the name
+    /// (excluding file extension) of a backup file.
+    pub fn clean_old_backups(&mut self) -> Result<(), Error> {
+        // Get top-level files in `Backup`
+        let backup_files_and_info: Vec<(PathBuf, FileInfo)> = self
+            .entries
+            .iter()
+            .map(|(path, info)| (path.clone(), info.clone()))
+            .filter(|(path, _)| {
+                path.starts_with("Backups")
+                    && path.components().count() == 2
+                    && !path.file_name().and_then(|f| f.to_str()).map_or(true, |f| f.starts_with('.'))
+            })
+            .collect();
+        // For each file prefix, determine the latest modified time.
+        let mut latest: HashMap<String, FileTime> = HashMap::new();
+        for (path, info) in &backup_files_and_info {
+            let prefix = Self::determine_filename_prefix(path);
+            let modification_time = info.get_modification_time();
+            latest.entry(prefix).and_modify(|m| *m = std::cmp::max(*m, modification_time)).or_insert(modification_time);
+        }
+        // Delete all older files for each prefix
+        for (path, info) in &backup_files_and_info {
+            let modification_time = info.get_modification_time();
+            let prefix = Self::determine_filename_prefix(path);
+            let latest_modification_time =
+                latest.get(&prefix).expect("Could not find latest modification time for prefix");
+            if modification_time < *latest_modification_time {
+                self.remove_file(path)?;
+            }
+        }
+        Ok(())
     }
 
     /// Removes all but the last `keep` full WhatsApp backup databases

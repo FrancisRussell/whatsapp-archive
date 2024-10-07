@@ -38,6 +38,9 @@ impl FileInfo {
         Ok(())
     }
 
+    /// Gets the modification time.
+    pub fn get_modification_time(&self) -> FileTime { self.modification_time }
+
     /// Attempts to estimate the creation date of a file based on WhatsApp's
     /// media file naming convention
     fn creation_date_from_name(filename: &Path) -> Option<NaiveDateTime> {
