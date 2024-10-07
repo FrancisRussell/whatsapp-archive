@@ -37,6 +37,13 @@ pub struct FileIndex {
     entries: HashMap<PathBuf, FileInfo>,
 }
 
+#[derive(Debug)]
+struct DbInfo {
+    pub is_incremental: bool,
+    pub file_extension: String,
+    pub last_modified: FileTime,
+}
+
 impl FileIndex {
     /// Constructs a new index of the files at the specified path.
     pub fn new<P: AsRef<Path>>(index_type: IndexType, path: P, action_type: ActionType) -> Result<FileIndex, Error> {
@@ -278,8 +285,7 @@ impl FileIndex {
         Ok(())
     }
 
-    /// Removes all but the last `keep` full WhatsApp backup databases
-    pub fn clean_old_dbs(&mut self, keep: usize) -> Result<(), Error> {
+    fn clean_previous_dbs(&mut self, keep: usize) -> Result<(), Error> {
         let db_regex = Regex::new(r"msgstore(?P<incremental>-increment-\d+)?-(<?P<date>\d{4}-\d{2}-\d{2})\.")
             .expect("Invalid database name regex");
         let path_dates: Vec<(PathBuf, NaiveDate)> = self
@@ -305,6 +311,69 @@ impl FileIndex {
         for db in to_delete {
             self.remove_file(db)?;
         }
+        Ok(())
+    }
+
+    fn clean_current_db(&mut self) -> Result<(), Error> {
+        // Matches the current database backup, including incrementals.
+        let db_regex = Regex::new(r"msgstore(?P<incremental>-increment-\d+)?\.db\.(?P<extension>.*)")
+            .expect("Invalid database name regex");
+
+        // Collect info for all database files
+        let db_infos: Vec<(PathBuf, DbInfo)> = self
+            .entries
+            .iter()
+            .map(|p| (p.0.clone(), p.1.clone()))
+            .filter_map(|(path, file_info)| {
+                if !path.starts_with("Databases") {
+                    return None;
+                }
+                let capture =
+                    path.file_name().and_then(|name| name.to_str()).and_then(|filename| db_regex.captures(filename));
+                capture.map(|capture| {
+                    (
+                        path.clone(),
+                        DbInfo {
+                            last_modified: file_info.get_modification_time(),
+                            file_extension: capture
+                                .name("extension")
+                                .expect("file extension unexpectedly missing")
+                                .as_str()
+                                .to_string(),
+                            is_incremental: capture.name("incremental").is_some(),
+                        },
+                    )
+                })
+            })
+            .collect();
+
+        // Determine the most recent full backup (there might be multiple DBs with
+        // different file extensions)
+        let latest_db_info = db_infos
+            .iter()
+            .map(|(_, info)| info)
+            .filter(|info| !info.is_incremental)
+            .max_by_key(|i| i.last_modified)
+            .expect("Unable to find current database");
+        let file_extension = latest_db_info.file_extension.clone();
+        let last_modified = latest_db_info.last_modified;
+
+        // Delete any DBs not in the currently used format, or incremental backups that
+        // are older than the last full backup.
+        for (path, info) in db_infos {
+            let incorrect_db_type = info.file_extension != file_extension;
+            let outdated_increment = info.is_incremental && info.last_modified < last_modified;
+            if incorrect_db_type || outdated_increment {
+                self.remove_file(&path)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes all but the last `keep` full WhatsApp backup databases
+    pub fn clean_old_dbs(&mut self, keep: usize) -> Result<(), Error> {
+        self.clean_previous_dbs(keep)?;
+        self.clean_current_db()?;
         Ok(())
     }
 
