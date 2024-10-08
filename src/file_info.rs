@@ -47,13 +47,11 @@ impl FileInfo {
     fn creation_date_from_name(filename: &Path) -> Option<NaiveDateTime> {
         let day_regex = Regex::new(r"^.*-(\d{8})-WA[0-9]{4}\..+$").unwrap();
         let filename = filename.to_string_lossy();
-        if let Some(capture) = day_regex.captures(&filename).and_then(|c| c.get(1)) {
+        day_regex.captures(&filename).and_then(|c| c.get(1)).and_then(|capture| {
             let date_time = NaiveDate::parse_from_str(capture.as_str(), "%Y%m%d")
                 .map(|date| NaiveDateTime::new(date, NaiveTime::MIN));
             date_time.ok()
-        } else {
-            None
-        }
+        })
     }
 
     /// Estimate when this file was created. This will attempt to infer the
