@@ -51,7 +51,7 @@ impl FileScore {
         #[allow(clippy::cast_precision_loss)]
         match *self {
             FileScore::Smaller => -(info.get_size() as f64),
-            FileScore::Newer => -(info.estimate_creation_date().timestamp_millis() as f64),
+            FileScore::Newer => -(info.estimate_creation_date().and_utc().timestamp_millis() as f64),
             FileScore::SmallerNewer => {
                 let now = Utc::now().naive_utc();
                 let offset = now.signed_duration_since(info.estimate_creation_date());

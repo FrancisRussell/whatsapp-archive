@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::path::Path;
 
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use filetime::FileTime;
 use regex::Regex;
 
@@ -23,8 +23,9 @@ impl FileInfo {
         let metadata = path.metadata().map_err(|e| (e, path))?;
         let modification_time = FileTime::from_last_modification_time(&metadata);
         let estimated_creation_date = Self::creation_date_from_name(filename.as_ref()).unwrap_or_else(|| {
-            NaiveDateTime::from_timestamp_opt(modification_time.unix_seconds(), modification_time.nanoseconds())
+            DateTime::<Utc>::from_timestamp(modification_time.unix_seconds(), modification_time.nanoseconds())
                 .expect("Timestamp conversion falure")
+                .naive_utc()
         });
         let result = FileInfo { modification_time, estimated_creation_date, size: metadata.len() };
         Ok(result)

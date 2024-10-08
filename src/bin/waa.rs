@@ -1,5 +1,5 @@
 #![warn(clippy::pedantic)]
-#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::uninlined_format_args, clippy::doc_markdown)]
 
 use std::path::PathBuf;
 
