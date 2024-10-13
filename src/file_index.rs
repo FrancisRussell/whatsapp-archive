@@ -146,6 +146,10 @@ impl FileIndex {
         if let Err(e) = std::fs::copy(source_path, &dest_path_temp)
             .map_err(|e| Error::Cp(e, source_path.to_owned(), dest_path_temp.clone()))
             .and_then(|_| {
+                let file = std::fs::File::open(&dest_path_temp).map_err(|e| Error::Io(e, dest_path_temp.clone()))?;
+                file.sync_data().map_err(|e| Error::Io(e, dest_path_temp.clone()))
+            })
+            .and_then(|()| {
                 std::fs::rename(&dest_path_temp, dest_path)
                     .map_err(|e| Error::Mv(e, dest_path_temp.clone(), dest_path.to_owned()))
             })
