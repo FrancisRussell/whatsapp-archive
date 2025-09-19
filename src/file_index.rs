@@ -290,7 +290,7 @@ impl FileIndex {
     }
 
     fn clean_previous_dbs(&mut self, keep: usize) -> Result<(), Error> {
-        let db_regex = Regex::new(r"msgstore(?P<incremental>-increment-\d+)?-(<?P<date>\d{4}-\d{2}-\d{2})\.")
+        let db_regex = Regex::new(r"msgstore(?P<incremental>-increment-\d+)?-(?P<date>\d{4}-\d{2}-\d{2})\.")
             .expect("Invalid database name regex");
         let path_dates: Vec<(PathBuf, NaiveDate)> = self
             .entries
